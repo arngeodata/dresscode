@@ -1,0 +1,183 @@
+"""
+Async job worker.
+Polls the async_jobs table for pending jobs and processes them one at a time.
+Runs as a background task alongside the FastAPI server (via asyncio).
+"""
+
+import asyncio
+import logging
+import io
+from datetime import datetime, timezone
+
+from app.config import get_settings
+from app.database import get_supabase
+from app.services.extractor import extract_text
+from app.services.claude import parse_cv
+from app.services.formatter import stamp_template
+from app.services.emailer import send_formatted_cv, send_error_email
+from app.services.limits import increment_cv_count
+
+logger = logging.getLogger(__name__)
+
+
+async def run_worker():
+    """
+    Main worker loop. Polls for pending jobs every `worker_poll_interval` seconds.
+    Designed to run as an asyncio background task.
+    """
+    settings = get_settings()
+    logger.info(f"Worker started. Polling every {settings.worker_poll_interval}s")
+
+    while True:
+        try:
+            await process_next_job()
+        except Exception as e:
+            logger.error(f"Unexpected worker error: {e}", exc_info=True)
+
+        await asyncio.sleep(settings.worker_poll_interval)
+
+
+async def process_next_job():
+    """
+    Pick up the oldest pending job, process it end-to-end, and mark it complete or failed.
+    If no jobs are pending, returns immediately.
+    """
+    supabase = get_supabase()
+
+    # Claim the next pending job atomically
+    result = (
+        supabase.table("async_jobs")
+        .select("*")
+        .eq("status", "pending")
+        .order("created_at", desc=False)
+        .limit(1)
+        .execute()
+    )
+
+    if not result.data:
+        return  # Nothing to do
+
+    job = result.data[0]
+    job_id = job["id"]
+    org_id = job["org_id"]
+    sender_email = job["sender_email"]
+    input_path = job["input_path"]
+    original_filename = job.get("original_filename", "cv.pdf")
+
+    logger.info(f"Processing job {job_id} for org {org_id}")
+
+    # Mark as processing
+    supabase.table("async_jobs").update({"status": "processing"}).eq("id", job_id).execute()
+
+    # ── Fetch the template for this organisation ───────────────────────────────
+    try:
+        template_result = (
+            supabase.table("templates")
+            .select("*")
+            .eq("org_id", org_id)
+            .eq("is_default", True)
+            .single()
+            .execute()
+        )
+
+        if not template_result.data:
+            raise ValueError(f"No default template found for org {org_id}")
+
+        template_path = template_result.data["storage_path"]
+        template_bytes = supabase.storage.from_("templates").download(template_path)
+
+    except Exception as e:
+        await _fail_job(job_id, sender_email, f"Template fetch failed: {e}")
+        return
+
+    # ── Download the input CV from storage ────────────────────────────────────
+    try:
+        file_bytes = supabase.storage.from_("cv-inputs").download(input_path)
+    except Exception as e:
+        await _fail_job(job_id, sender_email, f"Input file download failed: {e}")
+        return
+
+    # ── Extract text ──────────────────────────────────────────────────────────
+    try:
+        # Determine file type from path
+        content_type = (
+            "application/pdf"
+            if original_filename.lower().endswith(".pdf")
+            else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+        import base64
+        content_b64 = base64.b64encode(file_bytes).decode("utf-8")
+        raw_text = extract_text(content_b64, content_type, original_filename)
+
+    except Exception as e:
+        await _fail_job(job_id, sender_email, f"Text extraction failed: {e}")
+        return
+
+    # ── Parse with Claude ─────────────────────────────────────────────────────
+    try:
+        parsed_cv, tokens_in, tokens_out = parse_cv(raw_text)
+    except Exception as e:
+        await _fail_job(job_id, sender_email, f"Claude parsing failed: {e}")
+        return
+
+    # ── Generate formatted DOCX ───────────────────────────────────────────────
+    try:
+        formatted_bytes = stamp_template(template_bytes, parsed_cv)
+    except Exception as e:
+        await _fail_job(job_id, sender_email, f"Template stamping failed: {e}")
+        return
+
+    # ── Upload formatted output to storage ────────────────────────────────────
+    try:
+        output_path = input_path.replace("cv-inputs", "").lstrip("/")
+        output_path = f"{org_id}/{job_id}/formatted_{original_filename.replace('.pdf', '.docx')}"
+        supabase.storage.from_("cv-outputs").upload(
+            path=output_path,
+            file=formatted_bytes,
+            file_options={
+                "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            },
+        )
+    except Exception as e:
+        await _fail_job(job_id, sender_email, f"Output upload failed: {e}")
+        return
+
+    # ── Send the formatted CV by email ────────────────────────────────────────
+    candidate_name = parsed_cv.candidate.full_name or "Candidate"
+    sent = send_formatted_cv(
+        to_email=sender_email,
+        candidate_name=candidate_name,
+        docx_bytes=formatted_bytes,
+        original_filename=original_filename,
+    )
+
+    if not sent:
+        await _fail_job(job_id, sender_email, "Outbound email delivery failed")
+        return
+
+    # ── Mark complete and increment CV count ──────────────────────────────────
+    supabase.table("async_jobs").update({
+        "status": "complete",
+        "output_path": output_path,
+        "claude_tokens_in": tokens_in,
+        "claude_tokens_out": tokens_out,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", job_id).execute()
+
+    increment_cv_count(org_id)
+
+    logger.info(f"Job {job_id} complete. Candidate: {candidate_name}. Tokens: {tokens_in}/{tokens_out}")
+
+
+async def _fail_job(job_id: str, sender_email: str, error_message: str):
+    """Mark a job as failed and send an error email to the consultant."""
+    logger.error(f"Job {job_id} failed: {error_message}")
+
+    supabase = get_supabase()
+    supabase.table("async_jobs").update({
+        "status": "failed",
+        "error_message": error_message,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", job_id).execute()
+
+    send_error_email(sender_email, reason=error_message)

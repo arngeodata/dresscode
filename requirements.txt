@@ -1,0 +1,20 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# Supabase
+supabase==2.9.1
+
+# Anthropic
+anthropic==0.36.2
+
+# CV text extraction
+pdfminer.six==20231228
+python-docx==1.1.2
+
+# Email
+postmarker==1.0
+
+# Stripe (for webhook handling)
+stripe==10.12.0

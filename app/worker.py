@@ -69,7 +69,7 @@ async def process_next_job():
     # Mark as processing
     supabase.table("async_jobs").update({"status": "processing"}).eq("id", job_id).execute()
 
-    # ── Fetch style guide for this organisation ────────────────────────────────
+    # -- Fetch style guide for this organisation --------------------------------
     try:
         org_result = (
             supabase.table("organisations")
@@ -82,7 +82,6 @@ async def process_next_job():
         if not org_result.data:
             raise ValueError(f"Organisation {org_id} not found")
 
-        # style_guide may be None if not yet configured — formatter uses defaults
         style_guide = org_result.data.get("style_guide") or {}
         org_name    = org_result.data.get("name", "Agency")
         logger.info(f"Style guide loaded for '{org_name}' "
@@ -92,14 +91,14 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Organisation fetch failed: {e}")
         return
 
-    # ── Download the input CV from storage ─────────────────────────────────────
+    # -- Download the input CV from storage ------------------------------------
     try:
         file_bytes = supabase.storage.from_("cv-inputs").download(input_path)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Input file download failed: {e}")
         return
 
-    # ── Extract text ───────────────────────────────────────────────────────────
+    # -- Extract text ----------------------------------------------------------
     try:
         import base64
         content_type = (
@@ -114,14 +113,14 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Text extraction failed: {e}")
         return
 
-    # ── Parse with Claude ──────────────────────────────────────────────────────
+    # -- Parse with Claude -----------------------------------------------------
     try:
         parsed_cv, tokens_in, tokens_out = parse_cv(raw_text)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Claude parsing failed: {e}")
         return
 
-    # ── Fetch branded header image (if configured in style guide) ─────────────
+    # -- Fetch branded header image (if configured in style guide) -------------
     header_image_bytes = None
     hdr_cfg    = style_guide.get("header", {})
     img_bucket = hdr_cfg.get("image_bucket")
@@ -133,14 +132,14 @@ async def process_next_job():
         except Exception as e:
             logger.warning(f"Could not load header image {img_bucket}/{img_path}: {e}")
 
-    # ── Build formatted DOCX ───────────────────────────────────────────────────
+    # -- Build formatted DOCX --------------------------------------------------
     try:
         formatted_bytes = build_cv_docx(parsed_cv, style_guide, header_image_bytes)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"DOCX formatting failed: {e}")
         return
 
-    # ── Upload formatted output ────────────────────────────────────────────────
+    # -- Upload formatted output -----------------------------------------------
     try:
         candidate_name  = parsed_cv.candidate.full_name or "Candidate"
         filename_format = style_guide.get("output", {}).get("filename_format", "")
@@ -148,7 +147,9 @@ async def process_next_job():
             output_filename = filename_format.replace("{name}", candidate_name) + ".docx"
         else:
             output_filename = original_filename.rsplit(".", 1)[0] + "_formatted.docx"
-        output_path = f"{org_id}/{job_id}/{output_filename}"
+        # Sanitize storage key: Supabase rejects en-dashes and other non-ASCII chars
+        storage_filename = output_filename.encode("ascii", "ignore").decode().replace("  ", " ").strip()
+        output_path = f"{org_id}/{job_id}/{storage_filename}"
         supabase.storage.from_("cv-outputs").upload(
             path=output_path,
             file=formatted_bytes,
@@ -162,7 +163,7 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Output upload failed: {e}")
         return
 
-    # ── Send formatted CV by email ─────────────────────────────────────────────
+    # -- Send formatted CV by email --------------------------------------------
     sent = send_formatted_cv(
         to_email=sender_email,
         candidate_name=candidate_name,
@@ -174,13 +175,13 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, "Outbound email delivery failed")
         return
 
-    # ── Mark complete ──────────────────────────────────────────────────────────
+    # -- Mark complete ---------------------------------------------------------
     supabase.table("async_jobs").update({
-        "status":           "complete",
-        "output_path":      output_path,
+        "status":            "complete",
+        "output_path":       output_path,
         "claude_tokens_in":  tokens_in,
         "claude_tokens_out": tokens_out,
-        "completed_at":     datetime.now(timezone.utc).isoformat(),
+        "completed_at":      datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 
     increment_cv_count(org_id)
@@ -197,9 +198,9 @@ async def _fail_job(job_id: str, sender_email: str, error_message: str):
 
     supabase = get_supabase()
     supabase.table("async_jobs").update({
-        "status":       "failed",
+        "status":        "failed",
         "error_message": error_message,
-        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at":  datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 
     send_error_email(sender_email, reason=error_message)

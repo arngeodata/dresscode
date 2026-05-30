@@ -1,201 +1,265 @@
 """
-DOCX template stamping.
-Downloads the agency's brand template from Supabase Storage,
-replaces {{PLACEHOLDER}} markers with parsed CV data,
-and returns a formatted DOCX as bytes.
+CV formatter — style-guide-driven DOCX builder.
 
-Template placeholders:
-    {{CANDIDATE_NAME}}      - Full name
-    {{CANDIDATE_EMAIL}}     - Email address
-    {{CANDIDATE_PHONE}}     - Phone number
-    {{CANDIDATE_LOCATION}}  - Location
-    {{CANDIDATE_LINKEDIN}}  - LinkedIn URL
-    {{SUMMARY}}             - Professional summary
-
-For repeating blocks (experience, education), the template should contain
-marker rows/paragraphs with {{EXPERIENCE_BLOCK}} and {{EDUCATION_BLOCK}}.
-These are replaced with dynamically generated content.
+Takes a ParsedCV and a style guide dict, builds a clean DOCX from scratch
+using python-docx. No placeholder templates — the style guide drives fonts,
+colours, and layout. Sensible defaults apply if any field is missing.
 """
 
 import io
-import copy
 import logging
-from app.models import ParsedCV, ExperienceEntry, EducationEntry
+from docx import Document
+from docx.shared import Pt, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+from app.models import ParsedCV
 
 logger = logging.getLogger(__name__)
 
+# -- Default style guide (fallback for any missing keys)
+DEFAULT_STYLE_GUIDE = {
+    "fonts": {
+        "name_font":    "Calibri",
+        "body_font":    "Calibri",
+        "name_size":    22,
+        "section_size": 11,
+        "body_size":    10,
+    },
+    "colours": {
+        "primary_hex": "1B3A6B",
+        "accent_hex":  "4472C4",
+        "text_hex":    "000000",
+        "contact_hex": "595959",
+    },
+    "layout": {
+        "margins_cm":     1.8,
+        "name_alignment": "left",   # left | center
+    },
+    "sections": {
+        "order":            ["summary", "experience", "education", "skills"],
+        "summary_label":    "Profile",
+        "experience_label": "Experience",
+        "education_label":  "Education",
+        "skills_label":     "Key Skills",
+    },
+    "header": {
+        "contact_separator": "  |  ",
+        "show_linkedin":     True,
+    },
+}
 
-def stamp_template(template_bytes: bytes, cv: ParsedCV) -> bytes:
+
+def _merge(defaults: dict, overrides: dict) -> dict:
+    """Deep-merge overrides into defaults."""
+    result = defaults.copy()
+    for key, val in overrides.items():
+        if isinstance(val, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
+def _hex_to_rgb(hex_str: str) -> RGBColor:
+    h = hex_str.lstrip("#")
+    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _add_rule(paragraph, colour_hex: str):
+    """Add a thin coloured bottom border to a paragraph."""
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "6")
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), colour_hex.lstrip("#"))
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+
+
+def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
     """
-    Stamp parsed CV data into the brand DOCX template.
+    Build a formatted DOCX from a ParsedCV and an optional style guide dict.
 
     Args:
-        template_bytes: Raw bytes of the brand template DOCX
-        cv: Parsed CV data from Claude
+        cv:           Structured CV data from Claude parsing.
+        style_guide:  Style parameters. Missing keys fall back to DEFAULT_STYLE_GUIDE.
+                      Pass None to use full defaults.
 
     Returns:
-        Formatted DOCX as bytes, ready for email attachment
+        Raw DOCX bytes ready for email attachment.
     """
-    from docx import Document
-    from docx.shared import Pt
-    from docx.oxml.ns import qn
+    sg = _merge(DEFAULT_STYLE_GUIDE, style_guide or {})
 
-    doc = Document(io.BytesIO(template_bytes))
+    fonts    = sg["fonts"]
+    colours  = sg["colours"]
+    layout   = sg["layout"]
+    sections = sg["sections"]
+    header   = sg["header"]
 
-    # Build simple replacement map for scalar fields
-    replacements = {
-        "{{CANDIDATE_NAME}}":     cv.candidate.full_name or "",
-        "{{CANDIDATE_EMAIL}}":    cv.candidate.email or "",
-        "{{CANDIDATE_PHONE}}":    cv.candidate.phone or "",
-        "{{CANDIDATE_LOCATION}}": cv.candidate.location or "",
-        "{{CANDIDATE_LINKEDIN}}": cv.candidate.linkedin or "",
-        "{{SUMMARY}}":            cv.summary or "",
-    }
+    name_font    = fonts["name_font"]
+    body_font    = fonts["body_font"]
+    name_size    = fonts["name_size"]
+    section_size = fonts["section_size"]
+    body_size    = fonts["body_size"]
 
-    # ── Replace scalar placeholders in all paragraphs ─────────────────────────
-    for para in doc.paragraphs:
-        _replace_in_paragraph(para, replacements)
+    primary_colour = _hex_to_rgb(colours["primary_hex"])
+    accent_colour  = _hex_to_rgb(colours["accent_hex"])
+    text_colour    = _hex_to_rgb(colours["text_hex"])
+    contact_colour = _hex_to_rgb(colours.get("contact_hex", colours["text_hex"]))
 
-    # ── Replace scalar placeholders inside table cells ─────────────────────────
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    _replace_in_paragraph(para, replacements)
+    doc = Document()
 
-    # ── Handle experience block ────────────────────────────────────────────────
-    _replace_block(doc, "{{EXPERIENCE_BLOCK}}", cv.experience, _render_experience_entry)
+    # -- Page margins
+    for sec in doc.sections:
+        m = Cm(layout["margins_cm"])
+        sec.top_margin = sec.bottom_margin = sec.left_margin = sec.right_margin = m
 
-    # ── Handle education block ─────────────────────────────────────────────────
-    _replace_block(doc, "{{EDUCATION_BLOCK}}", cv.education, _render_education_entry)
+    # Remove the default empty paragraph Word adds
+    for para in list(doc.paragraphs):
+        para._element.getparent().remove(para._element)
 
-    # ── Handle skills block ────────────────────────────────────────────────────
-    _replace_skills(doc, cv.skills)
+    # -- Helpers
+    def add_run(paragraph, text, font=None, size=None, bold=False,
+                italic=False, colour=None):
+        run = paragraph.add_run(text)
+        run.font.name      = font or body_font
+        run.font.size      = Pt(size or body_size)
+        run.bold           = bold
+        run.italic         = italic
+        run.font.color.rgb = colour or text_colour
+        return run
 
-    # ── Save to buffer ────────────────────────────────────────────────────────
-    output = io.BytesIO()
-    doc.save(output)
-    output.seek(0)
-    return output.read()
+    def add_section_header(label: str):
+        para = doc.add_paragraph()
+        para.paragraph_format.space_before = Pt(12)
+        para.paragraph_format.space_after  = Pt(4)
+        run = para.add_run(label.upper())
+        run.bold           = True
+        run.font.name      = body_font
+        run.font.size      = Pt(section_size)
+        run.font.color.rgb = primary_colour
+        _add_rule(para, colours["primary_hex"])
+        return para
 
+    def add_body(text, bold=False, italic=False, colour=None,
+                 space_before=0, space_after=2):
+        para = doc.add_paragraph()
+        para.paragraph_format.space_before = Pt(space_before)
+        para.paragraph_format.space_after  = Pt(space_after)
+        run = para.add_run(text or "")
+        run.font.name      = body_font
+        run.font.size      = Pt(body_size)
+        run.bold           = bold
+        run.italic         = italic
+        run.font.color.rgb = colour or text_colour
+        return para
 
-def _replace_in_paragraph(para, replacements: dict):
-    """Replace placeholder text in a paragraph, preserving runs where possible."""
-    full_text = "".join(run.text for run in para.runs)
+    # -- Name alignment
+    name_align = (WD_ALIGN_PARAGRAPH.CENTER
+                  if layout.get("name_alignment") == "center"
+                  else WD_ALIGN_PARAGRAPH.LEFT)
 
-    for placeholder, value in replacements.items():
-        if placeholder in full_text:
-            full_text = full_text.replace(placeholder, value)
-            # Clear all runs and put the replaced text in the first run
-            if para.runs:
-                para.runs[0].text = full_text
-                for run in para.runs[1:]:
-                    run.text = ""
-            break  # One placeholder per paragraph expected
+    # -- Candidate header
+    name_para = doc.add_paragraph()
+    name_para.alignment = name_align
+    name_para.paragraph_format.space_before = Pt(0)
+    name_para.paragraph_format.space_after  = Pt(2)
+    add_run(name_para, cv.candidate.full_name or "",
+            font=name_font, size=name_size, bold=True, colour=primary_colour)
 
+    sep = header.get("contact_separator", "  |  ")
+    contact_parts = []
+    if cv.candidate.email:    contact_parts.append(cv.candidate.email)
+    if cv.candidate.phone:    contact_parts.append(cv.candidate.phone)
+    if cv.candidate.location: contact_parts.append(cv.candidate.location)
+    if header.get("show_linkedin") and cv.candidate.linkedin:
+        contact_parts.append(cv.candidate.linkedin)
 
-def _replace_block(doc, marker: str, entries: list, renderer):
-    """
-    Find the paragraph containing `marker`, insert rendered entries before it,
-    then remove the marker paragraph.
-    """
-    from docx.oxml import OxmlElement
+    if contact_parts:
+        c_para = doc.add_paragraph()
+        c_para.alignment = name_align
+        c_para.paragraph_format.space_before = Pt(0)
+        c_para.paragraph_format.space_after  = Pt(6)
+        add_run(c_para, sep.join(contact_parts),
+                size=body_size - 0.5, colour=contact_colour)
 
-    marker_para = None
-    for para in doc.paragraphs:
-        if marker in para.text:
-            marker_para = para
-            break
+    # -- Sections
+    for section_key in sections.get("order", ["summary", "experience", "education", "skills"]):
 
-    if marker_para is None:
-        logger.debug(f"Marker {marker} not found in template — skipping block")
-        return
+        if section_key == "summary" and cv.summary:
+            add_section_header(sections.get("summary_label", "Profile"))
+            add_body(cv.summary, space_after=4)
 
-    # Insert rendered entry paragraphs before the marker
-    for entry in reversed(entries):
-        rendered_paras = renderer(entry)
-        for new_para in reversed(rendered_paras):
-            marker_para._element.addprevious(new_para._element)
+        elif section_key == "experience" and cv.experience:
+            add_section_header(sections.get("experience_label", "Experience"))
 
-    # Remove the marker paragraph
-    marker_para._element.getparent().remove(marker_para._element)
+            for job in cv.experience:
+                job_para = doc.add_paragraph()
+                job_para.paragraph_format.space_before = Pt(6)
+                job_para.paragraph_format.space_after  = Pt(1)
+                add_run(job_para, job.title or "", bold=True)
+                if job.company:
+                    add_run(job_para, f"  |  {job.company}", colour=accent_colour)
 
+                # Date range
+                dates = []
+                if job.start_date: dates.append(job.start_date)
+                if job.end_date:   dates.append(job.end_date)
+                elif job.start_date: dates.append("Present")
+                if dates:
+                    d_para = doc.add_paragraph()
+                    d_para.paragraph_format.space_before = Pt(0)
+                    d_para.paragraph_format.space_after  = Pt(2)
+                    add_run(d_para, " - ".join(dates),
+                            italic=True, size=body_size - 0.5, colour=contact_colour)
 
-def _render_experience_entry(entry: ExperienceEntry):
-    """Create a list of Paragraph objects for one experience entry."""
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+                # Bullets
+                for bullet in (job.description or []):
+                    bullet = (bullet or "").strip()
+                    if not bullet:
+                        continue
+                    if bullet[:2] in ("- ", "* "):
+                        bullet = bullet[2:]
+                    elif bullet[:2] == "u2022 ":
+                        bullet = bullet[2:]
+                    bp = doc.add_paragraph(style="List Bullet")
+                    bp.paragraph_format.space_before = Pt(0)
+                    bp.paragraph_format.space_after  = Pt(1)
+                    r = bp.add_run(bullet)
+                    r.font.name      = body_font
+                    r.font.size      = Pt(body_size)
+                    r.font.color.rgb = text_colour
 
-    temp_doc = Document()
-    paras = []
+        elif section_key == "education" and cv.education:
+            add_section_header(sections.get("education_label", "Education"))
 
-    # Job title + company
-    p = temp_doc.add_paragraph()
-    r = p.add_run(f"{entry.title or 'Role'}")
-    r.bold = True
-    r.font.size = Pt(11)
-    if entry.company:
-        r2 = p.add_run(f"  |  {entry.company}")
-        r2.font.size = Pt(11)
-    paras.append(p)
+            for edu in cv.education:
+                edu_para = doc.add_paragraph()
+                edu_para.paragraph_format.space_before = Pt(6)
+                edu_para.paragraph_format.space_after  = Pt(1)
+                add_run(edu_para, edu.qualification or "", bold=True)
+                if edu.institution:
+                    add_run(edu_para, f"  |  {edu.institution}", colour=accent_colour)
 
-    # Dates
-    if entry.start_date or entry.end_date:
-        p2 = temp_doc.add_paragraph()
-        date_str = f"{entry.start_date or ''} – {entry.end_date or 'Present'}".strip(" –")
-        r3 = p2.add_run(date_str)
-        r3.italic = True
-        r3.font.size = Pt(10)
-        paras.append(p2)
+                if edu.graduation_year:
+                    y_para = doc.add_paragraph()
+                    y_para.paragraph_format.space_before = Pt(0)
+                    y_para.paragraph_format.space_after  = Pt(2)
+                    add_run(y_para, str(edu.graduation_year),
+                            italic=True, size=body_size - 0.5, colour=contact_colour)
 
-    # Responsibilities
-    for resp in entry.responsibilities:
-        p3 = temp_doc.add_paragraph(style="List Bullet")
-        r4 = p3.add_run(resp)
-        r4.font.size = Pt(10)
-        paras.append(p3)
+        elif section_key == "skills" and cv.skills:
+            add_section_header(sections.get("skills_label", "Key Skills"))
+            add_body("  u2022  ".join(cv.skills), space_after=4)
 
-    # Spacer
-    paras.append(temp_doc.add_paragraph())
-    return paras
-
-
-def _render_education_entry(entry: EducationEntry):
-    """Create a list of Paragraph objects for one education entry."""
-    from docx import Document
-    from docx.shared import Pt
-
-    temp_doc = Document()
-    paras = []
-
-    p = temp_doc.add_paragraph()
-    r = p.add_run(entry.qualification or "Qualification")
-    r.bold = True
-    r.font.size = Pt(10)
-    if entry.institution:
-        r2 = p.add_run(f", {entry.institution}")
-        r2.font.size = Pt(10)
-    if entry.year:
-        r3 = p.add_run(f" ({entry.year})")
-        r3.font.size = Pt(10)
-    paras.append(p)
-    return paras
-
-
-def _replace_skills(doc, skills: list[str]):
-    """Replace {{SKILLS_LIST}} marker with a comma-separated skills string."""
-    skills_str = ", ".join(skills) if skills else ""
-    for para in doc.paragraphs:
-        if "{{SKILLS_LIST}}" in para.text:
-            _replace_in_paragraph(para, {"{{SKILLS_LIST}}": skills_str})
-            return
-
-    # Also check tables
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    if "{{SKILLS_LIST}}" in para.text:
-                        _replace_in_paragraph(para, {"{{SKILLS_LIST}}": skills_str})
-                        return
+    # -- Save
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    logger.info(f"Built DOCX for {cv.candidate.full_name or 'unknown'} "
+                f"({len(cv.experience)} roles, {len(cv.education)} education entries)")
+    return buf.read()

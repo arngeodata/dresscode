@@ -89,7 +89,7 @@ def get_organisation_by_username(username: str) -> Organisation | None:
         .select("*")
         .eq("email_username", username.lower().strip())
         .eq("active", True)
-        .single()
+        .maybe_single()
         .execute()
     )
 

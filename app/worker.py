@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.database import get_supabase
 from app.services.extractor import extract_text
 from app.services.claude import parse_cv
-from app.services.formatter import stamp_template
+from app.services.formatter import build_cv_docx
 from app.services.emailer import send_formatted_cv, send_error_email
 from app.services.limits import increment_cv_count
 
@@ -44,7 +44,7 @@ async def process_next_job():
     """
     supabase = get_supabase()
 
-    # Claim the next pending job atomically
+    # Claim the next pending job
     result = (
         supabase.table("async_jobs")
         .select("*")
@@ -58,10 +58,10 @@ async def process_next_job():
         return  # Nothing to do
 
     job = result.data[0]
-    job_id = job["id"]
-    org_id = job["org_id"]
-    sender_email = job["sender_email"]
-    input_path = job["input_path"]
+    job_id          = job["id"]
+    org_id          = job["org_id"]
+    sender_email    = job["sender_email"]
+    input_path      = job["input_path"]
     original_filename = job.get("original_filename", "cv.pdf")
 
     logger.info(f"Processing job {job_id} for org {org_id}")
@@ -69,43 +69,44 @@ async def process_next_job():
     # Mark as processing
     supabase.table("async_jobs").update({"status": "processing"}).eq("id", job_id).execute()
 
-    # ── Fetch the template for this organisation ───────────────────────────────
+    # -- Fetch style guide for this organisation
     try:
-        template_result = (
-            supabase.table("templates")
-            .select("*")
-            .eq("org_id", org_id)
-            .eq("is_default", True)
+        org_result = (
+            supabase.table("organisations")
+            .select("name, style_guide")
+            .eq("id", org_id)
             .single()
             .execute()
         )
 
-        if not template_result.data:
-            raise ValueError(f"No default template found for org {org_id}")
+        if not org_result.data:
+            raise ValueError(f"Organisation {org_id} not found")
 
-        template_path = template_result.data["storage_path"]
-        template_bytes = supabase.storage.from_("templates").download(template_path)
+        # style_guide may be None if not yet configured -- formatter uses defaults
+        style_guide = org_result.data.get("style_guide") or {}
+        org_name    = org_result.data.get("name", "Agency")
+        logger.info(f"Style guide loaded for '{org_name}' "
+                    f"({'custom' if style_guide else 'default'})")
 
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"Template fetch failed: {e}")
+        await _fail_job(job_id, sender_email, f"Organisation fetch failed: {e}")
         return
 
-    # ── Download the input CV from storage ────────────────────────────────────
+    # -- Download the input CV from storage
     try:
         file_bytes = supabase.storage.from_("cv-inputs").download(input_path)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Input file download failed: {e}")
         return
 
-    # ── Extract text ──────────────────────────────────────────────────────────
+    # -- Extract text
     try:
-        # Determine file type from path
+        import base64
         content_type = (
             "application/pdf"
             if original_filename.lower().endswith(".pdf")
             else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-        import base64
         content_b64 = base64.b64encode(file_bytes).decode("utf-8")
         raw_text = extract_text(content_b64, content_type, original_filename)
 
@@ -113,60 +114,65 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Text extraction failed: {e}")
         return
 
-    # ── Parse with Claude ─────────────────────────────────────────────────────
+    # -- Parse with Claude
     try:
         parsed_cv, tokens_in, tokens_out = parse_cv(raw_text)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Claude parsing failed: {e}")
         return
 
-    # ── Generate formatted DOCX ───────────────────────────────────────────────
+    # -- Build formatted DOCX
     try:
-        formatted_bytes = stamp_template(template_bytes, parsed_cv)
+        formatted_bytes = build_cv_docx(parsed_cv, style_guide)
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"Template stamping failed: {e}")
+        await _fail_job(job_id, sender_email, f"DOCX formatting failed: {e}")
         return
 
-    # ── Upload formatted output to storage ────────────────────────────────────
+    # -- Upload formatted output
     try:
-        output_path = input_path.replace("cv-inputs", "").lstrip("/")
-        output_path = f"{org_id}/{job_id}/formatted_{original_filename.replace('.pdf', '.docx')}"
+        output_filename = original_filename.rsplit(".", 1)[0] + "_formatted.docx"
+        output_path = f"{org_id}/{job_id}/{output_filename}"
         supabase.storage.from_("cv-outputs").upload(
             path=output_path,
             file=formatted_bytes,
             file_options={
-                "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                "content-type": (
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
             },
         )
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Output upload failed: {e}")
         return
 
-    # ── Send the formatted CV by email ────────────────────────────────────────
+    # -- Send formatted CV by email
     candidate_name = parsed_cv.candidate.full_name or "Candidate"
     sent = send_formatted_cv(
         to_email=sender_email,
         candidate_name=candidate_name,
         docx_bytes=formatted_bytes,
-        original_filename=original_filename,
+        original_filename=output_filename,
     )
 
     if not sent:
         await _fail_job(job_id, sender_email, "Outbound email delivery failed")
         return
 
-    # ── Mark complete and increment CV count ──────────────────────────────────
+    # -- Mark complete
     supabase.table("async_jobs").update({
-        "status": "complete",
-        "output_path": output_path,
-        "claude_tokens_in": tokens_in,
+        "status":           "complete",
+        "output_path":      output_path,
+        "claude_tokens_in":  tokens_in,
         "claude_tokens_out": tokens_out,
-        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at":     datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 
     increment_cv_count(org_id)
 
-    logger.info(f"Job {job_id} complete. Candidate: {candidate_name}. Tokens: {tokens_in}/{tokens_out}")
+    logger.info(
+        f"Job {job_id} complete. Candidate: {candidate_name}. "
+        f"Tokens: {tokens_in}/{tokens_out}"
+    )
 
 
 async def _fail_job(job_id: str, sender_email: str, error_message: str):
@@ -175,7 +181,7 @@ async def _fail_job(job_id: str, sender_email: str, error_message: str):
 
     supabase = get_supabase()
     supabase.table("async_jobs").update({
-        "status": "failed",
+        "status":       "failed",
         "error_message": error_message,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()

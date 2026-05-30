@@ -99,7 +99,7 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Input file download failed: {e}")
         return
 
-    # ── Extract text ────────────────────────────────────────────────────────────
+    # ── Extract text ───────────────────────────────────────────────────────────
     try:
         import base64
         content_type = (
@@ -174,4 +174,32 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, "Outbound email delivery failed")
         return
 
-    # ── Mark complete ───────
+    # ── Mark complete ──────────────────────────────────────────────────────────
+    supabase.table("async_jobs").update({
+        "status":           "complete",
+        "output_path":      output_path,
+        "claude_tokens_in":  tokens_in,
+        "claude_tokens_out": tokens_out,
+        "completed_at":     datetime.now(timezone.utc).isoformat(),
+    }).eq("id", job_id).execute()
+
+    increment_cv_count(org_id)
+
+    logger.info(
+        f"Job {job_id} complete. Candidate: {candidate_name}. "
+        f"Tokens: {tokens_in}/{tokens_out}"
+    )
+
+
+async def _fail_job(job_id: str, sender_email: str, error_message: str):
+    """Mark a job as failed and send an error email to the consultant."""
+    logger.error(f"Job {job_id} failed: {error_message}")
+
+    supabase = get_supabase()
+    supabase.table("async_jobs").update({
+        "status":       "failed",
+        "error_message": error_message,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", job_id).execute()
+
+    send_error_email(sender_email, reason=error_message)

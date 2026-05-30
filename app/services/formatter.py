@@ -187,4 +187,130 @@ def build_cv_docx(
         para.paragraph_format.space_before = Pt(12)
         para.paragraph_format.space_after  = Pt(4)
         run = para.add_run(label.upper())
-        run.bold      2
+        run.bold           = True
+        run.font.name      = body_font
+        run.font.size      = Pt(section_size)
+        run.font.color.rgb = primary_colour
+        if use_section_border:
+            _add_rule(para, colours["primary_hex"])
+        return para
+
+    def add_body(text, bold=False, italic=False, colour=None,
+                 space_before=0, space_after=2):
+        para = doc.add_paragraph()
+        para.paragraph_format.space_before = Pt(space_before)
+        para.paragraph_format.space_after  = Pt(space_after)
+        run = para.add_run(text or "")
+        run.font.name      = body_font
+        run.font.size      = Pt(body_size)
+        run.bold           = bold
+        run.italic         = italic
+        run.font.color.rgb = colour or text_colour
+        return para
+
+    # ── Name alignment ────────────────────────────────────────────────────────
+    name_align = (WD_ALIGN_PARAGRAPH.CENTER
+                  if layout.get("name_alignment") == "center"
+                  else WD_ALIGN_PARAGRAPH.LEFT)
+
+    # ── Candidate name / document title ───────────────────────────────────────
+    name_text = (cv.candidate.full_name or "") + name_suffix
+    name_para = doc.add_paragraph()
+    name_para.alignment = name_align
+    name_para.paragraph_format.space_before = Pt(0)
+    name_para.paragraph_format.space_after  = Pt(2)
+    add_run(name_para, name_text,
+            font=name_font, size=name_size, bold=True, colour=primary_colour)
+
+    # ── Contact line (omitted when suppress_contact_details is True) ──────────
+    if not suppress_contact_details:
+        sep = header.get("contact_separator", "  |  ")
+        contact_parts = []
+        if cv.candidate.email:    contact_parts.append(cv.candidate.email)
+        if cv.candidate.phone:    contact_parts.append(cv.candidate.phone)
+        if cv.candidate.location: contact_parts.append(cv.candidate.location)
+        if header.get("show_linkedin") and cv.candidate.linkedin:
+            contact_parts.append(cv.candidate.linkedin)
+
+        if contact_parts:
+            c_para = doc.add_paragraph()
+            c_para.alignment = name_align
+            c_para.paragraph_format.space_before = Pt(0)
+            c_para.paragraph_format.space_after  = Pt(6)
+            add_run(c_para, sep.join(contact_parts),
+                    size=body_size - 0.5, colour=contact_colour)
+
+    # ── Sections ──────────────────────────────────────────────────────────────
+    for section_key in sections.get("order", ["summary", "experience", "education", "skills"]):
+
+        if section_key == "summary" and cv.summary:
+            add_section_header(sections.get("summary_label", "Profile"))
+            add_body(cv.summary, space_after=4)
+
+        elif section_key == "experience" and cv.experience:
+            add_section_header(sections.get("experience_label", "Experience"))
+
+            for job in cv.experience:
+                job_para = doc.add_paragraph()
+                job_para.paragraph_format.space_before = Pt(6)
+                job_para.paragraph_format.space_after  = Pt(1)
+                add_run(job_para, job.title or "", bold=True)
+                if job.company:
+                    add_run(job_para, f"  |  {job.company}", colour=accent_colour)
+
+                # Date range
+                dates = []
+                if job.start_date: dates.append(job.start_date)
+                if job.end_date:   dates.append(job.end_date)
+                elif job.start_date: dates.append("Present")
+                if dates:
+                    d_para = doc.add_paragraph()
+                    d_para.paragraph_format.space_before = Pt(0)
+                    d_para.paragraph_format.space_after  = Pt(2)
+                    add_run(d_para, " – ".join(dates),
+                            italic=True, size=body_size - 0.5, colour=contact_colour)
+
+                # Bullets
+                for bullet in (job.description or []):
+                    bullet = (bullet or "").strip()
+                    if not bullet:
+                        continue
+                    if bullet[:2] in ("- ", "• ", "* "):
+                        bullet = bullet[2:]
+                    bp = doc.add_paragraph(style="List Bullet")
+                    bp.paragraph_format.space_before = Pt(0)
+                    bp.paragraph_format.space_after  = Pt(1)
+                    r = bp.add_run(bullet)
+                    r.font.name      = body_font
+                    r.font.size      = Pt(body_size)
+                    r.font.color.rgb = text_colour
+
+        elif section_key == "education" and cv.education:
+            add_section_header(sections.get("education_label", "Education"))
+
+            for edu in cv.education:
+                edu_para = doc.add_paragraph()
+                edu_para.paragraph_format.space_before = Pt(6)
+                edu_para.paragraph_format.space_after  = Pt(1)
+                add_run(edu_para, edu.qualification or "", bold=True)
+                if edu.institution:
+                    add_run(edu_para, f"  |  {edu.institution}", colour=accent_colour)
+
+                if edu.graduation_year:
+                    y_para = doc.add_paragraph()
+                    y_para.paragraph_format.space_before = Pt(0)
+                    y_para.paragraph_format.space_after  = Pt(2)
+                    add_run(y_para, str(edu.graduation_year),
+                            italic=True, size=body_size - 0.5, colour=contact_colour)
+
+        elif section_key == "skills" and cv.skills:
+            add_section_header(sections.get("skills_label", "Key Skills"))
+            add_body("  •  ".join(cv.skills), space_after=4)
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    logger.info(f"Built DOCX for {cv.candidate.full_name or 'unknown'} "
+                f"({len(cv.experience)} roles, {len(cv.education)} education entries)")
+    return buf.read()

@@ -18,7 +18,7 @@ from app.models import ParsedCV
 
 logger = logging.getLogger(__name__)
 
-# -- Default style guide (fallback for any missing keys)
+# ── Default style guide (fallback for any missing keys) ──────────────────────────────────────────────────────────────────────────────
 DEFAULT_STYLE_GUIDE = {
     "fonts": {
         "name_font":    "Calibri",
@@ -113,7 +113,7 @@ def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
 
     doc = Document()
 
-    # -- Page margins
+    # ── Page margins ────────────────────────────────────────────────────────────────────────────────────────────────────
     for sec in doc.sections:
         m = Cm(layout["margins_cm"])
         sec.top_margin = sec.bottom_margin = sec.left_margin = sec.right_margin = m
@@ -122,7 +122,7 @@ def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
     for para in list(doc.paragraphs):
         para._element.getparent().remove(para._element)
 
-    # -- Helpers
+    # ── Helpers ───────────────────────────────────────────────────────────────────────────────────────────────────────
     def add_run(paragraph, text, font=None, size=None, bold=False,
                 italic=False, colour=None):
         run = paragraph.add_run(text)
@@ -158,12 +158,12 @@ def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
         run.font.color.rgb = colour or text_colour
         return para
 
-    # -- Name alignment
+    # ── Name alignment ────────────────────────────────────────────────────────────────────────────────────
     name_align = (WD_ALIGN_PARAGRAPH.CENTER
                   if layout.get("name_alignment") == "center"
                   else WD_ALIGN_PARAGRAPH.LEFT)
 
-    # -- Candidate header
+    # ── Candidate header ──────────────────────────────────────────────────────────────────────────────────────────
     name_para = doc.add_paragraph()
     name_para.alignment = name_align
     name_para.paragraph_format.space_before = Pt(0)
@@ -187,7 +187,7 @@ def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
         add_run(c_para, sep.join(contact_parts),
                 size=body_size - 0.5, colour=contact_colour)
 
-    # -- Sections
+    # ── Sections ──────────────────────────────────────────────────────────────────────────────────────────────────────────
     for section_key in sections.get("order", ["summary", "experience", "education", "skills"]):
 
         if section_key == "summary" and cv.summary:
@@ -214,7 +214,7 @@ def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
                     d_para = doc.add_paragraph()
                     d_para.paragraph_format.space_before = Pt(0)
                     d_para.paragraph_format.space_after  = Pt(2)
-                    add_run(d_para, " - ".join(dates),
+                    add_run(d_para, " – ".join(dates),
                             italic=True, size=body_size - 0.5, colour=contact_colour)
 
                 # Bullets
@@ -222,9 +222,7 @@ def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
                     bullet = (bullet or "").strip()
                     if not bullet:
                         continue
-                    if bullet[:2] in ("- ", "* "):
-                        bullet = bullet[2:]
-                    elif bullet[:2] == "u2022 ":
+                    if bullet[:2] in ("- ", "• ", "* "):
                         bullet = bullet[2:]
                     bp = doc.add_paragraph(style="List Bullet")
                     bp.paragraph_format.space_before = Pt(0)
@@ -254,9 +252,9 @@ def build_cv_docx(cv: ParsedCV, style_guide: dict | None = None) -> bytes:
 
         elif section_key == "skills" and cv.skills:
             add_section_header(sections.get("skills_label", "Key Skills"))
-            add_body("  u2022  ".join(cv.skills), space_after=4)
+            add_body("  •  ".join(cv.skills), space_after=4)
 
-    # -- Save
+    # ── Save ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)

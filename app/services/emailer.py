@@ -42,16 +42,16 @@ def send_formatted_cv(
     body_text = (
         f"Hi,\n\n"
         f"Your formatted CV for {candidate_name or 'the candidate'} is attached.\n\n"
-        f"— Dresscode\n"
+        f"\u2014 Dresscode\n"
         f"{settings.dresscode_support_email}"
     )
 
     try:
         client = _postmark_client()
         client.emails.send(
-            From=f"Dresscode <noreply@{settings.dresscode_domain}>",
+            From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
-            Subject=f"Your formatted CV is ready — {candidate_name or 'Candidate'}",
+            Subject=f"Your formatted CV is ready \u2014 {candidate_name or 'Candidate'}",
             TextBody=body_text,
             Attachments=[
                 {
@@ -82,18 +82,18 @@ def send_error_email(to_email: str, reason: str = "processing") -> bool:
     body_text = (
         "Hi,\n\n"
         "We weren't able to process the CV you sent. This can happen if:\n"
-        "  • The file is password-protected\n"
-        "  • The PDF is a scanned image with no extractable text\n"
-        "  • The file is corrupted\n\n"
+        "  \u2022 The file is password-protected\n"
+        "  \u2022 The PDF is a scanned image with no extractable text\n"
+        "  \u2022 The file is corrupted\n\n"
         "Please try again with a different file, or contact us at "
         f"{settings.dresscode_support_email} if the problem persists.\n\n"
-        "— Dresscode"
+        "\u2014 Dresscode"
     )
 
     try:
         client = _postmark_client()
         client.emails.send(
-            From=f"Dresscode <noreply@{settings.dresscode_domain}>",
+            From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
             Subject="We couldn't process this CV",
             TextBody=body_text,
@@ -112,18 +112,18 @@ def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_lim
 
     body_text = (
         f"Hi {org_name},\n\n"
-        f"You've used {cv_count} of your {cv_limit} monthly CVs — "
+        f"You've used {cv_count} of your {cv_limit} monthly CVs \u2014 "
         f"just {remaining} remaining.\n\n"
         f"To avoid interruption, upgrade your plan at dresscode.com/billing.\n\n"
-        "— Dresscode"
+        "\u2014 Dresscode"
     )
 
     try:
         client = _postmark_client()
         client.emails.send(
-            From=f"Dresscode <noreply@{settings.dresscode_domain}>",
+            From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
-            Subject=f"You're nearly at your CV limit this month — {remaining} remaining",
+            Subject=f"You're nearly at your CV limit this month \u2014 {remaining} remaining",
             TextBody=body_text,
         )
         return True
@@ -140,14 +140,14 @@ def send_limit_reached_email(to_email: str, org_name: str, cv_limit: int) -> boo
         f"Hi {org_name},\n\n"
         f"You've reached your {cv_limit} CV limit for this month. "
         f"CVs sent to Dresscode will not be processed until your limit resets or you upgrade.\n\n"
-        f"Upgrade your plan at dresscode.com/billing — takes 60 seconds.\n\n"
-        "— Dresscode"
+        f"Upgrade your plan at dresscode.com/billing \u2014 takes 60 seconds.\n\n"
+        "\u2014 Dresscode"
     )
 
     try:
         client = _postmark_client()
         client.emails.send(
-            From=f"Dresscode <noreply@{settings.dresscode_domain}>",
+            From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
             Subject="You've reached your monthly CV limit",
             TextBody=body_text,
@@ -167,13 +167,13 @@ def send_not_authorised_email(to_email: str, dresscode_address: str) -> bool:
         f"Your email address isn't authorised to send CVs to {dresscode_address}.\n\n"
         f"If you think this is a mistake, ask your agency admin to add your email domain "
         f"in the Dresscode settings, or contact {settings.dresscode_support_email}.\n\n"
-        "— Dresscode"
+        "\u2014 Dresscode"
     )
 
     try:
         client = _postmark_client()
         client.emails.send(
-            From=f"Dresscode <noreply@{settings.dresscode_domain}>",
+            From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
             Subject="Your email address isn't authorised for this Dresscode address",
             TextBody=body_text,
@@ -192,13 +192,13 @@ def send_no_attachment_email(to_email: str) -> bool:
         "Hi,\n\n"
         "We received your email but couldn't find a CV attachment (PDF or Word document).\n\n"
         "Please re-send with the CV file attached.\n\n"
-        "— Dresscode"
+        "\u2014 Dresscode"
     )
 
     try:
         client = _postmark_client()
         client.emails.send(
-            From=f"Dresscode <noreply@{settings.dresscode_domain}>",
+            From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
             Subject="No CV attachment found",
             TextBody=body_text,

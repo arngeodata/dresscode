@@ -67,6 +67,12 @@ def parse_cv(raw_text: str) -> tuple[ParsedCV, int, int]:
     settings = get_settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
+    # Guard against very long CVs that would exceed max output tokens
+    max_input_chars = 15_000
+    if len(raw_text) > max_input_chars:
+        logger.warning(f"CV text truncated from {len(raw_text)} to {max_input_chars} chars before parsing")
+        raw_text = raw_text[:max_input_chars]
+
     last_error = None
 
     for attempt in range(2):  # 2 attempts max

@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 class LimitStatus(Enum):
     OK = "ok"                   # Under limit, proceed
-    WARNING = "warning"         # 90%+ used — process but send warning
-    EXCEEDED = "exceeded"       # At or over limit — reject
-    UNLIMITED = "unlimited"     # Studio tier — always proceed
+    WARNING = "warning"         # 90%+ used \u2014 process but send warning
+    EXCEEDED = "exceeded"       # At or over limit \u2014 reject
+    UNLIMITED = "unlimited"     # Studio tier \u2014 always proceed
 
 
 @dataclass
@@ -32,7 +32,7 @@ def check_limits(org: Organisation) -> LimitCheck:
 
     Returns a LimitCheck with the status and the organisation record.
     """
-    # Studio tier — unlimited
+    # Studio tier \u2014 unlimited
     if org.cv_limit is None:
         return LimitCheck(status=LimitStatus.UNLIMITED, org=org)
 
@@ -63,17 +63,28 @@ def increment_cv_count(org_id: str) -> int:
     """
     supabase = get_supabase()
 
-    # Atomic increment using RPC
+    # Read current count, then write new value
+    # (Worker processes one job at a time so this is safe without atomicity)
+    org_result = (
+        supabase.table("organisations")
+        .select("cv_count")
+        .eq("id", org_id)
+        .single()
+        .execute()
+    )
+    current = (org_result.data or {}).get("cv_count", 0) or 0
+    new_count = current + 1
+
     result = (
         supabase.table("organisations")
-        .update({"cv_count": supabase.raw("cv_count + 1")})
+        .update({"cv_count": new_count})
         .eq("id", org_id)
         .execute()
     )
 
     if result.data:
-        return result.data[0].get("cv_count", 0)
-    return 0
+        return result.data[0].get("cv_count", new_count)
+    return new_count
 
 
 def get_organisation_by_username(username: str) -> Organisation | None:
@@ -102,7 +113,7 @@ def get_organisation_by_username(username: str) -> Organisation | None:
 def is_sender_allowed(org: Organisation, sender_domain: str) -> bool:
     """
     Check if the sender's email domain is whitelisted for this organisation.
-    An empty allowed_domains list blocks all senders (misconfiguration — log it).
+    An empty allowed_domains list blocks all senders (misconfiguration \u2014 log it).
     """
     if not org.allowed_domains:
         logger.warning(f"Organisation {org.name} has no allowed_domains configured")

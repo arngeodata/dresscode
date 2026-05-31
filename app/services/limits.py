@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 class LimitStatus(Enum):
     OK = "ok"                   # Under limit, proceed
-    WARNING = "warning"         # 90%+ used \u2014 process but send warning
-    EXCEEDED = "exceeded"       # At or over limit \u2014 reject
-    UNLIMITED = "unlimited"     # Studio tier \u2014 always proceed
+    WARNING = "warning"         # 90%+ used — process but send warning
+    EXCEEDED = "exceeded"       # At or over limit — reject
+    UNLIMITED = "unlimited"     # Studio tier — always proceed
 
 
 @dataclass
@@ -32,7 +32,7 @@ def check_limits(org: Organisation) -> LimitCheck:
 
     Returns a LimitCheck with the status and the organisation record.
     """
-    # Studio tier \u2014 unlimited
+    # Studio tier — unlimited
     if org.cv_limit is None:
         return LimitCheck(status=LimitStatus.UNLIMITED, org=org)
 
@@ -87,9 +87,13 @@ def increment_cv_count(org_id: str) -> int:
     return new_count
 
 
-def get_organisation_by_username(username: str) -> Organisation | None:
+def get_organisation_by_domain(sender_domain: str) -> Organisation | None:
     """
-    Look up an organisation by their email username (e.g. 'acme' from 'acme@dresscode.com').
+    Look up an organisation by the sender's email domain.
+    Finding the org by domain IS the authorisation check — if their domain
+    isn't in allowed_domains for any active org, they're not a customer.
+
+    e.g. 'hyperion-partners.co.uk' from 'george@hyperion-partners.co.uk'
 
     Returns None if not found or inactive.
     """
@@ -98,7 +102,7 @@ def get_organisation_by_username(username: str) -> Organisation | None:
     result = (
         supabase.table("organisations")
         .select("*")
-        .eq("email_username", username.lower().strip())
+        .contains("allowed_domains", [sender_domain.lower().strip()])
         .eq("active", True)
         .maybe_single()
         .execute()
@@ -108,15 +112,3 @@ def get_organisation_by_username(username: str) -> Organisation | None:
         return None
 
     return Organisation(**result.data)
-
-
-def is_sender_allowed(org: Organisation, sender_domain: str) -> bool:
-    """
-    Check if the sender's email domain is whitelisted for this organisation.
-    An empty allowed_domains list blocks all senders (misconfiguration \u2014 log it).
-    """
-    if not org.allowed_domains:
-        logger.warning(f"Organisation {org.name} has no allowed_domains configured")
-        return False
-
-    return sender_domain.lower() in [d.lower() for d in org.allowed_domains]

@@ -13,8 +13,7 @@ from app.models import PostmarkInboundPayload
 from app.database import get_supabase
 from app.config import get_settings
 from app.services.limits import (
-    get_organisation_by_username,
-    is_sender_allowed,
+    get_organisation_by_domain,
     check_limits,
     LimitStatus,
 )
@@ -51,23 +50,17 @@ async def handle_inbound(request: Request):
 
     sender_email = payload.From
     recipient = payload.OriginalRecipient
-    username = payload.agency_username()
     sender_domain = payload.sender_domain()
 
     logger.info(f"Inbound email from {sender_email} to {recipient}")
 
-    # ── 1. Look up the organisation ───────────────────────────────────────────
-    org = get_organisation_by_username(username)
+    # ── 1. Look up the organisation by sender domain ───────────────────────────
+    # Finding the org IS the auth check — unknown domain = not a customer.
+    org = get_organisation_by_domain(sender_domain)
     if not org:
-        logger.warning(f"No active organisation found for username: {username}")
-        # Don't send an email — this might be spam/probing
-        return {"status": "ignored", "reason": "unknown_recipient"}
-
-    # ── 2. Check sender is authorised ─────────────────────────────────────────
-    if not is_sender_allowed(org, sender_domain):
-        logger.warning(f"Sender {sender_email} not authorised for org {org.name}")
-        send_not_authorised_email(sender_email, recipient)
-        return {"status": "rejected", "reason": "sender_not_authorised"}
+        logger.warning(f"No active organisation found for sender domain: {sender_domain}")
+        # Don't send an email back — could be spam/probing
+        return {"status": "ignored", "reason": "unknown_sender_domain"}
 
     # ── 3. Check for a valid CV attachment ────────────────────────────────────
     attachment = payload.first_cv_attachment()

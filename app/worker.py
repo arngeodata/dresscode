@@ -2,6 +2,12 @@
 Async job worker.
 Polls the async_jobs table for pending jobs and processes them one at a time.
 Runs as a background task alongside the FastAPI server (via asyncio).
+
+Formatting pipeline:
+  1. Try to download org-builders/{org_id}/cv_builder.js from Supabase storage.
+     If found, use the Node.js builder (build_cv_with_node).
+  2. If no builder is uploaded for this org, fall back to the Python formatter
+     (build_cv_docx) so the pipeline keeps working during onboarding.
 """
 
 import asyncio
@@ -14,6 +20,7 @@ from app.database import get_supabase
 from app.services.extractor import extract_text
 from app.services.claude import parse_cv
 from app.services.formatter import build_cv_docx
+from app.services.node_formatter import build_cv_with_node
 from app.services.emailer import send_formatted_cv, send_error_email
 from app.services.limits import increment_cv_count
 
@@ -58,10 +65,10 @@ async def process_next_job():
         return  # Nothing to do
 
     job = result.data[0]
-    job_id          = job["id"]
-    org_id          = job["org_id"]
-    sender_email    = job["sender_email"]
-    input_path      = job["input_path"]
+    job_id            = job["id"]
+    org_id            = job["org_id"]
+    sender_email      = job["sender_email"]
+    input_path        = job["input_path"]
     original_filename = job.get("original_filename", "cv.pdf")
 
     logger.info(f"Processing job {job_id} for org {org_id}")
@@ -69,7 +76,7 @@ async def process_next_job():
     # Mark as processing
     supabase.table("async_jobs").update({"status": "processing"}).eq("id", job_id).execute()
 
-    # -- Fetch style guide for this organisation --------------------------------
+    # ── Fetch style guide for this organisation ────────────────────────────────
     try:
         org_result = (
             supabase.table("organisations")
@@ -91,14 +98,14 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Organisation fetch failed: {e}")
         return
 
-    # -- Download the input CV from storage ------------------------------------
+    # ── Download the input CV from storage ─────────────────────────────────────
     try:
         file_bytes = supabase.storage.from_("cv-inputs").download(input_path)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Input file download failed: {e}")
         return
 
-    # -- Extract text ----------------------------------------------------------
+    # ── Extract text ───────────────────────────────────────────────────────────
     try:
         import base64
         content_type = (
@@ -113,14 +120,14 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Text extraction failed: {e}")
         return
 
-    # -- Parse with Claude -----------------------------------------------------
+    # ── Parse with Claude ──────────────────────────────────────────────────────
     try:
         parsed_cv, tokens_in, tokens_out = parse_cv(raw_text)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Claude parsing failed: {e}")
         return
 
-    # -- Fetch branded header image (if configured in style guide) -------------
+    # ── Fetch branded header image (if configured in style guide) ─────────────
     header_image_bytes = None
     hdr_cfg    = style_guide.get("header", {})
     img_bucket = hdr_cfg.get("image_bucket")
@@ -132,14 +139,27 @@ async def process_next_job():
         except Exception as e:
             logger.warning(f"Could not load header image {img_bucket}/{img_path}: {e}")
 
-    # -- Build formatted DOCX --------------------------------------------------
+    # ── Try Node.js builder; fall back to Python formatter ────────────────────
+    builder_js_bytes = None
+    builder_path     = f"{org_id}/cv_builder.js"
     try:
-        formatted_bytes = build_cv_docx(parsed_cv, style_guide, header_image_bytes)
+        builder_js_bytes = supabase.storage.from_("org-builders").download(builder_path)
+        logger.info(f"Node.js builder found for org {org_id}")
+    except Exception:
+        logger.info(f"No Node.js builder at org-builders/{builder_path} — using Python formatter")
+
+    try:
+        if builder_js_bytes:
+            formatted_bytes = build_cv_with_node(
+                parsed_cv, builder_js_bytes, header_image_bytes
+            )
+        else:
+            formatted_bytes = build_cv_docx(parsed_cv, style_guide, header_image_bytes)
     except Exception as e:
         await _fail_job(job_id, sender_email, f"DOCX formatting failed: {e}")
         return
 
-    # -- Upload formatted output -----------------------------------------------
+    # ── Upload formatted output ────────────────────────────────────────────────
     try:
         candidate_name  = parsed_cv.candidate.full_name or "Candidate"
         filename_format = style_guide.get("output", {}).get("filename_format", "")
@@ -163,7 +183,7 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, f"Output upload failed: {e}")
         return
 
-    # -- Send formatted CV by email --------------------------------------------
+    # ── Send formatted CV by email ─────────────────────────────────────────────
     sent = send_formatted_cv(
         to_email=sender_email,
         candidate_name=candidate_name,
@@ -175,7 +195,7 @@ async def process_next_job():
         await _fail_job(job_id, sender_email, "Outbound email delivery failed")
         return
 
-    # -- Mark complete ---------------------------------------------------------
+    # ── Mark complete ──────────────────────────────────────────────────────────
     supabase.table("async_jobs").update({
         "status":            "complete",
         "output_path":       output_path,
@@ -188,7 +208,8 @@ async def process_next_job():
 
     logger.info(
         f"Job {job_id} complete. Candidate: {candidate_name}. "
-        f"Tokens: {tokens_in}/{tokens_out}"
+        f"Tokens: {tokens_in}/{tokens_out}. "
+        f"Formatter: {'node.js' if builder_js_bytes else 'python'}"
     )
 
 

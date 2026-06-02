@@ -1,0 +1,9 @@
+{
+  "name": "dresscode",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js dependencies for Dresscode cv_builder.js scripts",
+  "dependencies": {
+    "docx": "9.6.1"
+  }
+}

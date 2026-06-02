@@ -1,8 +1,8 @@
 """
-CV formatter -- style-guide-driven DOCX builder.
+CV formatter — style-guide-driven DOCX builder.
 
 Takes a ParsedCV and a style guide dict, builds a clean DOCX from scratch
-using python-docx. No placeholder templates -- the style guide drives fonts,
+using python-docx. No placeholder templates — the style guide drives fonts,
 colours, and layout. Sensible defaults apply if any field is missing.
 
 Optional header_image_bytes: if supplied, the image is embedded into the Word
@@ -22,7 +22,7 @@ from app.models import ParsedCV
 
 logger = logging.getLogger(__name__)
 
-# -- Default style guide (fallback for any missing keys) ----------------------
+# ── Default style guide (fallback for any missing keys) ───────────────────────
 DEFAULT_STYLE_GUIDE = {
     "fonts": {
         "name_font":    "Calibri",
@@ -39,9 +39,9 @@ DEFAULT_STYLE_GUIDE = {
     },
     "layout": {
         "margins_cm":     1.8,
-        "name_alignment": "left",
-        "section_border": True,
-        "name_suffix":    "",
+        "name_alignment": "left",   # left | center
+        "section_border": True,     # coloured rule under section headings
+        "name_suffix":    "",       # e.g. " – CV" for Hyperion style
     },
     "sections": {
         "order":            ["summary", "experience", "education", "skills"],
@@ -51,11 +51,13 @@ DEFAULT_STYLE_GUIDE = {
         "skills_label":     "Key Skills",
     },
     "header": {
-        "contact_separator":        "  |  ",
-        "show_linkedin":            True,
-        "suppress_contact_details": False,
+        "contact_separator":       "  |  ",
+        "show_linkedin":           True,
+        "suppress_contact_details": False,  # set True to omit contact line entirely
+        # image_bucket / image_path: handled by worker.py — not used here directly
     },
     "output": {
+        # filename_format: use {name} placeholder; omit to keep default naming
         "filename_format": "",
     },
 }
@@ -103,6 +105,8 @@ def build_cv_docx(
         style_guide:         Style parameters. Missing keys fall back to
                              DEFAULT_STYLE_GUIDE. Pass None to use full defaults.
         header_image_bytes:  Raw PNG/JPEG bytes for the branded header image.
+                             If supplied, the image is embedded full-width into
+                             the Word header section, flush to the top of the page.
 
     Returns:
         Raw DOCX bytes ready for email attachment.
@@ -132,15 +136,16 @@ def build_cv_docx(
 
     doc = Document()
 
-    # -- Page margins ----------------------------------------------------------
+    # ── Page margins ──────────────────────────────────────────────────────────
     for sec in doc.sections:
         m = Cm(layout["margins_cm"])
         sec.top_margin = sec.bottom_margin = sec.left_margin = sec.right_margin = m
 
-    # -- Branded header image --------------------------------------------------
+    # ── Branded header image ───────────────────────────────────────────────────
     if header_image_bytes:
         section = doc.sections[0]
 
+        # Set header-from-top distance to 0 so image is flush to page edge
         pg_mar = section._sectPr.find(qn("w:pgMar"))
         if pg_mar is not None:
             pg_mar.set(qn("w:header"), "0")
@@ -148,9 +153,11 @@ def build_cv_docx(
         hdr = section.header
         hdr.is_linked_to_previous = False
 
+        # Remove default blank paragraph from header
         for p in list(hdr.paragraphs):
             p._element.getparent().remove(p._element)
 
+        # Add image paragraph — negative left indent extends to page edge
         hdr_para = hdr.add_paragraph()
         hdr_para.paragraph_format.space_before = Pt(0)
         hdr_para.paragraph_format.space_after  = Pt(0)
@@ -160,10 +167,11 @@ def build_cv_docx(
 
         logger.info("Branded header image embedded")
 
+    # Remove the default empty paragraph Word adds to the body
     for para in list(doc.paragraphs):
         para._element.getparent().remove(para._element)
 
-    # -- Helpers ---------------------------------------------------------------
+    # ── Helpers ───────────────────────────────────────────────────────────────
     def add_run(paragraph, text, font=None, size=None, bold=False,
                 italic=False, colour=None):
         run = paragraph.add_run(text)
@@ -178,7 +186,7 @@ def build_cv_docx(
         para = doc.add_paragraph()
         para.paragraph_format.space_before = Pt(12)
         para.paragraph_format.space_after  = Pt(4)
-        run = para.add_run(label.upper())
+        run = para.add_run(label)
         run.bold           = True
         run.font.name      = body_font
         run.font.size      = Pt(section_size)
@@ -200,12 +208,12 @@ def build_cv_docx(
         run.font.color.rgb = colour or text_colour
         return para
 
-    # -- Name alignment --------------------------------------------------------
+    # ── Name alignment ────────────────────────────────────────────────────────
     name_align = (WD_ALIGN_PARAGRAPH.CENTER
                   if layout.get("name_alignment") == "center"
                   else WD_ALIGN_PARAGRAPH.LEFT)
 
-    # -- Candidate name --------------------------------------------------------
+    # ── Candidate name / document title ───────────────────────────────────────
     name_text = (cv.candidate.full_name or "") + name_suffix
     name_para = doc.add_paragraph()
     name_para.alignment = name_align
@@ -214,7 +222,7 @@ def build_cv_docx(
     add_run(name_para, name_text,
             font=name_font, size=name_size, bold=True, colour=primary_colour)
 
-    # -- Contact line ----------------------------------------------------------
+    # ── Contact line (omitted when suppress_contact_details is True) ──────────
     if not suppress_contact_details:
         sep = header.get("contact_separator", "  |  ")
         contact_parts = []
@@ -232,7 +240,7 @@ def build_cv_docx(
             add_run(c_para, sep.join(contact_parts),
                     size=body_size - 0.5, colour=contact_colour)
 
-    # -- Sections --------------------------------------------------------------
+    # ── Sections ──────────────────────────────────────────────────────────────
     for section_key in sections.get("order", ["summary", "experience", "education", "skills"]):
 
         if section_key == "summary" and cv.summary:
@@ -250,6 +258,7 @@ def build_cv_docx(
                 if job.company:
                     add_run(job_para, f"  |  {job.company}", colour=accent_colour)
 
+                # Date range
                 dates = []
                 if job.start_date: dates.append(job.start_date)
                 if job.end_date:   dates.append(job.end_date)
@@ -258,14 +267,15 @@ def build_cv_docx(
                     d_para = doc.add_paragraph()
                     d_para.paragraph_format.space_before = Pt(0)
                     d_para.paragraph_format.space_after  = Pt(2)
-                    add_run(d_para, " - ".join(dates),
+                    add_run(d_para, " – ".join(dates),
                             italic=True, size=body_size - 0.5, colour=contact_colour)
 
+                # Bullets
                 for bullet in (job.responsibilities or []):
                     bullet = (bullet or "").strip()
                     if not bullet:
                         continue
-                    if bullet[:2] in ("- ", "- ", "* "):
+                    if bullet[:2] in ("- ", "• ", "* "):
                         bullet = bullet[2:]
                     bp = doc.add_paragraph(style="List Bullet")
                     bp.paragraph_format.space_before = Pt(0)
@@ -295,9 +305,9 @@ def build_cv_docx(
 
         elif section_key == "skills" and cv.skills:
             add_section_header(sections.get("skills_label", "Key Skills"))
-            add_body("  -  ".join(cv.skills), space_after=4)
+            add_body("  •  ".join(cv.skills), space_after=4)
 
-    # -- Save ------------------------------------------------------------------
+    # ── Save ──────────────────────────────────────────────────────────────────
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)

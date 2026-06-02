@@ -24,4 +24,4 @@ ENV NODE_PATH=/app/node_modules
 COPY . .
 
 # ── Start ─────────────────────────────────────────────────────────────────────
-CMD uvicorn main:app --host 0.0.0.0 --port $PORT
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]

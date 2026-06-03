@@ -129,7 +129,7 @@ def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_lim
 
     body_text = (
         f"Hi {org_name},\n\n"
-        f"You've used {cv_count= of your {cv_limit} monthly CVs — "
+        f"You've used {cv_count} of your {cv_limit} monthly CVs — "
         f"just {remaining} remaining.\n\n"
         f"To avoid interruption, upgrade your plan at dresscode.com/billing.\n\n"
         "— Dresscode"

@@ -18,7 +18,8 @@ Rules:
 - Preserve the original wording of job descriptions and achievements exactly — do not summarise or embellish.
 - Standardise all date formats to "Month YYYY" (e.g. "March 2022"). Use "Present" for current roles.
 - If multiple phone numbers exist, use the first mobile number.
-- Skills should be individual items, not grouped sentences.
+- Skills: preserve the original grouping exactly. If skills appear under category labels (e.g. "Property: x, y, z" or "Software: a, b, c"), keep each group as a single string including its label. If skills are already listed as individual items, keep them as individual items.
+- Any section that is not summary/profile, experience/career history, education, skills, or languages goes into extra_sections. Capture the section title exactly as it appears, and each paragraph or bullet point as a separate item in the items array.
 
 Return this exact structure:
 {
@@ -47,7 +48,13 @@ Return this exact structure:
     }
   ],
   "skills": [string],
-  "languages": [string]
+  "languages": [string],
+  "extra_sections": [
+    {
+      "title": string,
+      "items": [string]
+    }
+  ]
 }"""
 
 

@@ -50,6 +50,7 @@ class PostmarkInboundPayload(BaseModel):
 
 class CandidateContact(BaseModel):
     full_name: Optional[str] = None
+    credentials: Optional[str] = None   # post-nominals e.g. "FRICS", "MSc MRICS"
     email: Optional[str] = None
     phone: Optional[str] = None
     location: Optional[str] = None

@@ -3,7 +3,7 @@ from typing import Optional
 import re
 
 
-# \u2500\u2500 Postmark inbound webhook payload \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── Postmark inbound webhook payload ──────────────────────────────────────────
 
 class PostmarkAttachment(BaseModel):
     Name: str
@@ -21,7 +21,7 @@ class PostmarkInboundPayload(BaseModel):
     Attachments: list[PostmarkAttachment] = []
 
     def agency_username(self) -> str:
-        """Extract the username portion of the recipient address, e.g. 'acme' from 'acme@cvdresscode.com'."""
+        """Extract the username portion of the recipient address, e.g. 'acme' from 'acme@dresscode.com'."""
         return self.OriginalRecipient.split("@")[0].lower().strip()
 
     def sender_domain(self) -> str:
@@ -46,7 +46,7 @@ class PostmarkInboundPayload(BaseModel):
         return None
 
 
-# \u2500\u2500 Claude structured CV response \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── Claude structured CV response ─────────────────────────────────────────────
 
 class CandidateContact(BaseModel):
     full_name: Optional[str] = None
@@ -70,6 +70,11 @@ class EducationEntry(BaseModel):
     year: Optional[str] = None
 
 
+class ExtraSection(BaseModel):
+    title: str
+    items: list[str] = []  # paragraphs and bullet points in order
+
+
 class ParsedCV(BaseModel):
     candidate: CandidateContact = CandidateContact()
     summary: Optional[str] = None
@@ -77,9 +82,10 @@ class ParsedCV(BaseModel):
     education: list[EducationEntry] = []
     skills: list[str] = []
     languages: list[str] = []
+    extra_sections: list[ExtraSection] = []
 
 
-# \u2500\u2500 Internal job record \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── Internal job record ───────────────────────────────────────────────────────
 
 class JobRecord(BaseModel):
     id: str
@@ -92,7 +98,7 @@ class JobRecord(BaseModel):
     error_message: Optional[str]
 
 
-# \u2500\u2500 Organisation record \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ── Organisation record ───────────────────────────────────────────────────────
 
 class Organisation(BaseModel):
     id: str

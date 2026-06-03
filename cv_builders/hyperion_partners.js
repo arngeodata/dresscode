@@ -30,7 +30,7 @@ const {
 } = require('docx');
 const fs = require('fs');
 
-// ── CLI args ─────────────────────────────────────────────────────────────────
+// ── CLI args ──────────────────────────────────────────────────────────────────
 const [cvPath, headerImgPath, outputPath] = process.argv.slice(2);
 
 if (!cvPath || !outputPath) {
@@ -130,7 +130,7 @@ if (cv.summary) {
   children.push(R(cv.summary));
 }
 
-// ── Education ─────────────────────────────────────────────────────────────────
+// ── Education ────────────────────────────────────────────────────────────────
 if (cv.education && cv.education.length > 0) {
   children.push(blank());
   children.push(B('Education'));
@@ -190,15 +190,30 @@ if (cv.experience && cv.experience.length > 0) {
   });
 }
 
+// ── Extra sections (catch-all for anything outside core sections) ─────────────
+if (cv.extra_sections && cv.extra_sections.length > 0) {
+  cv.extra_sections.forEach((section, idx) => {
+    if (!section.title) return;
+    const bulletRef = `bullets-extra-${idx}`;
+    children.push(blank());
+    children.push(B(section.title));
+    for (const item of (section.items || [])) {
+      const text = cleanBullet(item);
+      if (text) children.push(bullet(text, bulletRef));
+    }
+  });
+}
+
 // References footer
 children.push(blank());
 children.push(R('References: Available on request'));
 
-// ── Bullet numbering configs (edu, skills, up to 20 roles) ───────────────────
+// ── Bullet numbering configs (edu, skills, up to 20 roles, up to 10 extra) ───
 const bulletConfigs = [
   makeBulletConfig('bullets-edu'),
   makeBulletConfig('bullets-skills'),
-  ...Array.from({ length: 20 }, (_, i) => makeBulletConfig(`bullets-r${i + 1}`))
+  ...Array.from({ length: 20 }, (_, i) => makeBulletConfig(`bullets-r${i + 1}`)),
+  ...Array.from({ length: 10 }, (_, i) => makeBulletConfig(`bullets-extra-${i}`))
 ];
 
 // ── Header section (branded image or empty) ───────────────────────────────────

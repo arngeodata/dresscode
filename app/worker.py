@@ -91,6 +91,8 @@ async def process_next_job():
 
         style_guide = org_result.data.get("style_guide") or {}
         org_name    = org_result.data.get("name", "Agency")
+        # Slug used for human-readable Storage folder names (e.g. "Hyperion Partners" → "hyperion-partners")
+        org_slug    = org_name.lower().replace(' ', '-').replace("'", '').replace('.', '')
         logger.info(f"Style guide loaded for '{org_name}' "
                     f"({'custom' if style_guide else 'default'})")
 
@@ -141,10 +143,10 @@ async def process_next_job():
 
     # ── Try Node.js builder; fall back to Python formatter ────────────────────
     builder_js_bytes = None
-    builder_path     = f"{org_id}/cv_builder.js"
+    builder_path     = f"{org_slug}/cv_builder.js"
     try:
         builder_js_bytes = supabase.storage.from_("org-builders").download(builder_path)
-        logger.info(f"Node.js builder found for org {org_id}")
+        logger.info(f"Node.js builder found for org {org_name} ({org_slug})")
     except Exception:
         logger.info(f"No Node.js builder at org-builders/{builder_path} — using Python formatter")
 
@@ -161,7 +163,12 @@ async def process_next_job():
 
     # ── Upload formatted output ────────────────────────────────────────────────
     try:
-        candidate_name  = parsed_cv.candidate.full_name or "Candidate"
+        raw_name        = parsed_cv.candidate.full_name or "Candidate"
+        # Normalise to title case, handling hyphenated names (e.g. ALEXANDER-WALCOTT → Alexander-Walcott)
+        candidate_name  = ' '.join(
+            '-'.join(part.capitalize() for part in word.split('-'))
+            for word in raw_name.split()
+        )
         filename_format = style_guide.get("output", {}).get("filename_format", "")
         if filename_format:
             output_filename = filename_format.replace("{name}", candidate_name) + ".docx"

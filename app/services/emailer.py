@@ -36,8 +36,8 @@ def send_formatted_cv(
     """
     settings = get_settings()
 
-    safe_name = candidate_name.replace(" ", "_") if candidate_name else "Candidate"
-    attachment_name = f"{safe_name}_Formatted.docx"
+    # Use the filename worker.py computed from the org's style_guide filename_format
+    attachment_name = original_filename
 
     body_text = (
         f"Hi,\n\n"

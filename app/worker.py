@@ -160,12 +160,14 @@ async def process_next_job():
         return
 
     # ── Upload formatted output ────────────────────────────────────────────────
-  candidate_name  = parsed_cv.candidate.full_name or "Candidate"
-filename_format = style_guide.get("output", {}).get("filename_format", "")
-if filename_format:
-    output_filename = filename_format.replace("{name}", candidate_name) + ".docx"
-else:
-    output_filename = original_filename.rsplit(".", 1)[0] + "_formatted.docx"
+    try:
+        candidate_name  = parsed_cv.candidate.full_name or "Candidate"
+        filename_format = style_guide.get("output", {}).get("filename_format", "")
+        if filename_format:
+            output_filename = filename_format.replace("{name}", candidate_name) + ".docx"
+        else:
+            output_filename = original_filename.rsplit(".", 1)[0] + "_formatted.docx"
+        # Sanitize storage key: Supabase rejects en-dashes and other non-ASCII chars
         storage_filename = output_filename.encode("ascii", "ignore").decode().replace("  ", " ").strip()
         output_path = f"{org_id}/{job_id}/{storage_filename}"
         supabase.storage.from_("cv-outputs").upload(

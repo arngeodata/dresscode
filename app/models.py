@@ -110,3 +110,5 @@ class Organisation(BaseModel):
     cv_limit: Optional[int]
     cv_count: int
     active: bool
+    stripe_customer_id: Optional[str] = None  # keys Stripe meter events; None for free/test orgs
+    stripe_sub_id: Optional[str] = None

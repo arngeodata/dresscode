@@ -65,6 +65,32 @@ def check_limits(org: Organisation) -> LimitCheck:
     return LimitCheck(status=LimitStatus.OK, org=org)
 
 
+# Per-CV overage rates above the included allowance (GBP). Keep in sync with Stripe.
+OVERAGE_RATES = {"starter": 2.50, "growth": 1.50, "studio": 0.50}
+
+
+def build_usage_note(tier: str, count: int, cv_limit: int | None) -> str:
+    """
+    One-line usage summary for the returned-CV email.
+
+    Within allowance:  "This is CV 47/50 included in your package this month."
+    Over allowance:     "This is CV 52 — 2 over your 50 included this month,
+                         billed at £2.50 each (pay-as-you-go)."
+    """
+    if cv_limit is None:
+        return f"This is CV {count} this month."
+
+    if count <= cv_limit:
+        return f"This is CV {count}/{cv_limit} included in your package this month."
+
+    over = count - cv_limit
+    rate = OVERAGE_RATES.get((tier or "").lower())
+    rate_txt = f", billed at £{rate:.2f} each (pay-as-you-go)" if rate else ""
+    return (
+        f"This is CV {count} — {over} over your {cv_limit} included this month{rate_txt}."
+    )
+
+
 def increment_cv_count(org_id: str) -> int:
     """
     Increment the CV count for an organisation after a successful job, and

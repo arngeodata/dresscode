@@ -20,7 +20,6 @@ from app.services.limits import (
 from app.services.emailer import (
     send_not_authorised_email,
     send_no_attachment_email,
-    send_limit_reached_email,
     send_limit_warning_email,
 )
 
@@ -77,16 +76,23 @@ async def handle_inbound(request: Request):
         return {"status": "rejected", "reason": "attachment_too_large"}
 
     # ── 4. Check usage limits ─────────────────────────────────────────────────
+    # Pricing model is "flat fee + overage" — we no longer reject at the cap.
+    # Every CV is processed; usage above the included allowance is billed per-CV
+    # via Stripe metering (see limits.increment_cv_count / billing.report_cv_usage).
     limit_check = check_limits(org)
 
-    if limit_check.status == LimitStatus.EXCEEDED:
-        logger.info(f"Limit exceeded for {org.name} ({org.cv_count}/{org.cv_limit})")
-        send_limit_reached_email(sender_email, org.name, org.cv_limit)
-        return {"status": "rejected", "reason": "limit_exceeded"}
+    if limit_check.status == LimitStatus.OVER_CAP:
+        # Over the included allowance — process anyway, overage is metered/billed.
+        logger.info(
+            f"Overage for {org.name} ({org.cv_count}/{org.cv_limit}) — processing, billing per CV"
+        )
+        # TODO: add send_overage_notice_email() so the customer knows overage
+        # billing has begun. Do NOT reuse send_limit_reached_email — its copy
+        # says "no more CVs", which is no longer true.
 
-    if limit_check.status == LimitStatus.WARNING:
-        # Process the CV but also fire the warning email
-        logger.info(f"Limit warning for {org.name} ({org.cv_count}/{org.cv_limit})")
+    elif limit_check.status == LimitStatus.APPROACHING_CAP:
+        # Process the CV and warn that the included allowance is nearly used.
+        logger.info(f"Approaching allowance for {org.name} ({org.cv_count}/{org.cv_limit})")
         send_limit_warning_email(sender_email, org.name, org.cv_count, org.cv_limit)
 
     # ── 5. Store the input file in Supabase Storage ───────────────────────────

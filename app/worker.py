@@ -22,7 +22,7 @@ from app.services.claude import parse_cv
 from app.services.formatter import build_cv_docx
 from app.services.node_formatter import build_cv_with_node
 from app.services.emailer import send_formatted_cv, send_error_email
-from app.services.limits import increment_cv_count
+from app.services.limits import increment_cv_count, build_usage_note
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ async def process_next_job():
     try:
         org_result = (
             supabase.table("organisations")
-            .select("name, style_guide")
+            .select("name, style_guide, cv_count, cv_limit, tier")
             .eq("id", org_id)
             .single()
             .execute()
@@ -91,6 +91,9 @@ async def process_next_job():
 
         style_guide = org_result.data.get("style_guide") or {}
         org_name    = org_result.data.get("name", "Agency")
+        org_cv_count = org_result.data.get("cv_count", 0) or 0
+        org_cv_limit = org_result.data.get("cv_limit")
+        org_tier     = org_result.data.get("tier", "")
         # Slug used for human-readable Storage folder names (e.g. "Hyperion Partners" → "hyperion-partners")
         org_slug    = org_name.lower().replace(' ', '-').replace("'", '').replace('.', '')
         logger.info(f"Style guide loaded for '{org_name}' "
@@ -191,11 +194,14 @@ async def process_next_job():
         return
 
     # ── Send formatted CV by email ─────────────────────────────────────────────
+    # Usage line for the email reflects the count AFTER this CV (current + 1).
+    usage_note = build_usage_note(org_tier, org_cv_count + 1, org_cv_limit)
     sent = send_formatted_cv(
         to_email=sender_email,
         candidate_name=candidate_name,
         docx_bytes=formatted_bytes,
         original_filename=output_filename,
+        usage_note=usage_note,
     )
 
     if not sent:
@@ -213,10 +219,31 @@ async def process_next_job():
 
     increment_cv_count(org_id)
 
+    # ── Delete-after-delivery (GDPR: "processed transiently, nothing retained") ──
+    # The CV has been emailed (from in-memory bytes), so we can safely delete the
+    # stored original + formatted copies and scrub candidate-identifying metadata.
+    # Runs AFTER send, so it never delays delivery. Failures here are non-fatal.
+    try:
+        supabase.storage.from_("cv-inputs").remove([input_path])
+        supabase.storage.from_("cv-outputs").remove([output_path])
+    except Exception as e:
+        logger.error(f"Post-delivery storage cleanup failed for job {job_id}: {e}")
+
+    try:
+        # Keep token counts / status / timestamps for billing; drop candidate PII.
+        supabase.table("async_jobs").update({
+            "original_filename": None,
+            "input_path":        "deleted",
+            "output_path":       "deleted",
+        }).eq("id", job_id).execute()
+    except Exception as e:
+        logger.error(f"Post-delivery metadata scrub failed for job {job_id}: {e}")
+
     logger.info(
         f"Job {job_id} complete. Candidate: {candidate_name}. "
         f"Tokens: {tokens_in}/{tokens_out}. "
-        f"Formatter: {'node.js' if builder_js_bytes else 'python'}"
+        f"Formatter: {'node.js' if builder_js_bytes else 'python'}. "
+        f"Candidate data deleted after delivery."
     )
 
 

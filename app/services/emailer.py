@@ -21,6 +21,7 @@ def send_formatted_cv(
     candidate_name: str,
     docx_bytes: bytes,
     original_filename: str,
+    usage_note: str = "",
 ) -> bool:
     """
     Email the formatted CV back to the consultant.
@@ -30,6 +31,8 @@ def send_formatted_cv(
         candidate_name: Used in subject line
         docx_bytes: The formatted DOCX file as bytes
         original_filename: Original filename, used to name the attachment
+        usage_note: Optional one-line usage summary (e.g. "This is CV 47/50
+            included in your package this month.") shown above the signature.
 
     Returns:
         True if sent successfully
@@ -42,7 +45,8 @@ def send_formatted_cv(
     body_text = (
         f"Hi,\n\n"
         f"Your formatted CV for {candidate_name or 'the candidate'} is attached.\n\n"
-        f"— Dresscode\n"
+        + (f"{usage_note}\n\n" if usage_note else "")
+        + f"— Dresscode\n"
         f"{settings.dresscode_support_email}"
     )
 

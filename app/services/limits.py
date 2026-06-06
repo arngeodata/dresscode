@@ -160,3 +160,30 @@ def get_organisation_by_domain(sender_domain: str) -> Organisation | None:
         return None
 
     return Organisation(**result.data)
+
+
+def get_organisation_by_email_username(username: str) -> Organisation | None:
+    """
+    Look up an organisation by its email_username (the local-part before @).
+
+    Used for the public trial inbox (trial@cvdresscode.com → the 'trial' org),
+    which is NOT authed by sender domain. For normal customer traffic, auth still
+    happens via get_organisation_by_domain().
+
+    Returns None if not found or inactive.
+    """
+    supabase = get_supabase()
+
+    result = (
+        supabase.table("organisations")
+        .select("*")
+        .eq("email_username", username.lower().strip())
+        .eq("active", True)
+        .maybe_single()
+        .execute()
+    )
+
+    if not result.data:
+        return None
+
+    return Organisation(**result.data)

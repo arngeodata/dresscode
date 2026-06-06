@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     dresscode_domain: str = "dresscode.com"
     dresscode_from_email: str = "george@hyperion-partners.co.uk"
     dresscode_support_email: str = "george@hyperion-partners.co.uk"  # support@cvdresscode.com mailbox doesn't exist yet
+    trial_username: str = "trial"  # local-part of the public lead-magnet inbox: trial@cvdresscode.com
 
     # ── Stripe ────────────────────────────────────────────────────────────────
     stripe_secret_key: str = "REPLACE_WITH_STRIPE_SECRET_KEY"

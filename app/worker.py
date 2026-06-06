@@ -80,7 +80,7 @@ async def process_next_job():
     try:
         org_result = (
             supabase.table("organisations")
-            .select("name, style_guide, cv_count, cv_limit, tier")
+            .select("name, style_guide, cv_count, cv_limit, tier, email_username")
             .eq("id", org_id)
             .single()
             .execute()
@@ -94,6 +94,9 @@ async def process_next_job():
         org_cv_count = org_result.data.get("cv_count", 0) or 0
         org_cv_limit = org_result.data.get("cv_limit")
         org_tier     = org_result.data.get("tier", "")
+        org_email_username = (org_result.data.get("email_username") or "")
+        # Public trial jobs get NO "CV X/50 included in your package" line.
+        is_trial_job = org_email_username.lower() == get_settings().trial_username.lower()
         # Slug used for human-readable Storage folder names (e.g. "Hyperion Partners" → "hyperion-partners")
         org_slug    = org_name.lower().replace(' ', '-').replace("'", '').replace('.', '')
         logger.info(f"Style guide loaded for '{org_name}' "
@@ -195,7 +198,8 @@ async def process_next_job():
 
     # ── Send formatted CV by email ─────────────────────────────────────────────
     # Usage line for the email reflects the count AFTER this CV (current + 1).
-    usage_note = build_usage_note(org_tier, org_cv_count + 1, org_cv_limit)
+    # Suppressed for public trial jobs (the recipient isn't a paying customer).
+    usage_note = "" if is_trial_job else build_usage_note(org_tier, org_cv_count + 1, org_cv_limit)
     sent = send_formatted_cv(
         to_email=sender_email,
         candidate_name=candidate_name,

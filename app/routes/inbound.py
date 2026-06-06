@@ -14,6 +14,7 @@ from app.database import get_supabase
 from app.config import get_settings
 from app.services.limits import (
     get_organisation_by_domain,
+    get_organisation_by_email_username,
     check_limits,
     LimitStatus,
 )
@@ -53,13 +54,31 @@ async def handle_inbound(request: Request):
 
     logger.info(f"Inbound email from {sender_email} to {recipient}")
 
-    # ── 1. Look up the organisation by sender domain ───────────────────────────
-    # Finding the org IS the auth check — unknown domain = not a customer.
-    org = get_organisation_by_domain(sender_domain)
-    if not org:
-        logger.warning(f"No active organisation found for sender domain: {sender_domain}")
-        # Don't send an email back — could be spam/probing
-        return {"status": "ignored", "reason": "unknown_sender_domain"}
+    # Is this the public trial inbox (trial@cvdresscode.com)?
+    # ONLY a recipient whose local-part matches settings.trial_username triggers
+    # trial mode. Every other address falls through to normal customer auth below.
+    recipient_local = (recipient or "").split("@")[0].strip().lower()
+    is_trial = recipient_local == settings.trial_username.lower()
+
+    # ── 1. Resolve the organisation ────────────────────────────────────────────
+    if is_trial:
+        # Trial mode: public lead magnet — skip FROM-domain auth, use the 'trial' org.
+        org = get_organisation_by_email_username(settings.trial_username)
+        if not org:
+            logger.error(
+                f"Trial org (email_username='{settings.trial_username}') not found — "
+                f"cannot process trial CV from {sender_email}"
+            )
+            return {"status": "ignored", "reason": "trial_org_missing"}
+        logger.info(f"Trial request from {sender_email} → routed to '{org.name}' org")
+        # TODO (Phase 2.10): record_trial_lead(sender_email, sender_name, sender_domain, phone)
+    else:
+        # Normal mode: finding the org by sender domain IS the auth check.
+        org = get_organisation_by_domain(sender_domain)
+        if not org:
+            logger.warning(f"No active organisation found for sender domain: {sender_domain}")
+            # Don't send an email back — could be spam/probing
+            return {"status": "ignored", "reason": "unknown_sender_domain"}
 
     # ── 3. Check for a valid CV attachment ────────────────────────────────────
     attachment = payload.first_cv_attachment()
@@ -75,25 +94,23 @@ async def handle_inbound(request: Request):
         send_no_attachment_email(sender_email)
         return {"status": "rejected", "reason": "attachment_too_large"}
 
-    # ── 4. Check usage limits ─────────────────────────────────────────────────
+    # ── 4. Check usage limits (customer orgs only — never for the public trial) ─
     # Pricing model is "flat fee + overage" — we no longer reject at the cap.
     # Every CV is processed; usage above the included allowance is billed per-CV
     # via Stripe metering (see limits.increment_cv_count / billing.report_cv_usage).
-    limit_check = check_limits(org)
+    if not is_trial:
+        limit_check = check_limits(org)
 
-    if limit_check.status == LimitStatus.OVER_CAP:
-        # Over the included allowance — process anyway, overage is metered/billed.
-        logger.info(
-            f"Overage for {org.name} ({org.cv_count}/{org.cv_limit}) — processing, billing per CV"
-        )
-        # TODO: add send_overage_notice_email() so the customer knows overage
-        # billing has begun. Do NOT reuse send_limit_reached_email — its copy
-        # says "no more CVs", which is no longer true.
+        if limit_check.status == LimitStatus.OVER_CAP:
+            # Over the included allowance — process anyway, overage is metered/billed.
+            logger.info(
+                f"Overage for {org.name} ({org.cv_count}/{org.cv_limit}) — processing, billing per CV"
+            )
 
-    elif limit_check.status == LimitStatus.APPROACHING_CAP:
-        # Process the CV and warn that the included allowance is nearly used.
-        logger.info(f"Approaching allowance for {org.name} ({org.cv_count}/{org.cv_limit})")
-        send_limit_warning_email(sender_email, org.name, org.cv_count, org.cv_limit)
+        elif limit_check.status == LimitStatus.APPROACHING_CAP:
+            # Process the CV and warn that the included allowance is nearly used.
+            logger.info(f"Approaching allowance for {org.name} ({org.cv_count}/{org.cv_limit})")
+            send_limit_warning_email(sender_email, org.name, org.cv_count, org.cv_limit)
 
     # ── 5. Store the input file in Supabase Storage ───────────────────────────
     job_id = str(uuid.uuid4())

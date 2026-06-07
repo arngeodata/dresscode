@@ -18,3 +18,6 @@ postmarker==1.0
 
 # Stripe (for webhook handling)
 stripe==10.12.0
+
+# Phone-number extraction from trial sender signatures (UK/US/AU/CA/NZ/IE)
+phonenumbers>=8.13.0

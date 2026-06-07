@@ -126,6 +126,24 @@ def send_error_email(to_email: str, reason: str = "processing") -> bool:
         return False
 
 
+def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
+    """Send a simple internal text email (no attachment). Used for the daily trial digest."""
+    settings = get_settings()
+    try:
+        client = _postmark_client()
+        client.emails.send(
+            From=f"Dresscode <{settings.dresscode_from_email}>",
+            To=to_email,
+            Subject=subject,
+            TextBody=body_text,
+        )
+        logger.info(f"Plain email sent to {to_email}: {subject}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send plain email to {to_email}: {e}")
+        return False
+
+
 def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_limit: int) -> bool:
     """Send a 90% usage warning to the consultant."""
     settings = get_settings()

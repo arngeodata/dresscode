@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     dresscode_from_email: str = "george@hyperion-partners.co.uk"
     dresscode_support_email: str = "george@hyperion-partners.co.uk"  # support@cvdresscode.com mailbox doesn't exist yet
     trial_username: str = "trial"  # local-part of the public lead-magnet inbox: trial@cvdresscode.com
+    digest_to_email: str = "george@hyperion-partners.co.uk"  # daily trial-lead digest recipient
+    digest_hour_utc: int = 7  # hour (UTC) to send the daily trial-lead digest (~7-8am UK)
 
     # ── Stripe ────────────────────────────────────────────────────────────────
     stripe_secret_key: str = "REPLACE_WITH_STRIPE_SECRET_KEY"

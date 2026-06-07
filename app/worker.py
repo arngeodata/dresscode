@@ -23,6 +23,7 @@ from app.services.formatter import build_cv_docx
 from app.services.node_formatter import build_cv_with_node
 from app.services.emailer import send_formatted_cv, send_error_email
 from app.services.limits import increment_cv_count, build_usage_note
+from app.services.trial_leads import send_daily_digest
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,32 @@ async def run_worker():
             logger.error(f"Unexpected worker error: {e}", exc_info=True)
 
         await asyncio.sleep(settings.worker_poll_interval)
+
+
+async def run_daily_digest():
+    """
+    Once per day (around settings.digest_hour_utc), email George the trial-lead
+    digest. Checks every 5 minutes; an in-memory guard prevents double-sends.
+
+    Note: the guard resets on redeploy, so a redeploy during the digest hour
+    could send a second copy that day — harmless. send_daily_digest() also
+    sends nothing on a zero-lead day.
+    """
+    last_sent_date = None
+    logger.info("Daily digest scheduler started.")
+
+    while True:
+        try:
+            settings = get_settings()
+            now = datetime.now(timezone.utc)
+            if now.hour == settings.digest_hour_utc and last_sent_date != now.date():
+                logger.info("Running daily trial-lead digest...")
+                send_daily_digest()
+                last_sent_date = now.date()
+        except Exception as e:
+            logger.error(f"Daily digest error: {e}", exc_info=True)
+
+        await asyncio.sleep(300)  # check every 5 minutes
 
 
 async def process_next_job():

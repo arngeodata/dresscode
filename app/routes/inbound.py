@@ -23,6 +23,7 @@ from app.services.emailer import (
     send_no_attachment_email,
     send_limit_warning_email,
 )
+from app.services.trial_leads import record_trial_lead, extract_phone
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -71,7 +72,13 @@ async def handle_inbound(request: Request):
             )
             return {"status": "ignored", "reason": "trial_org_missing"}
         logger.info(f"Trial request from {sender_email} → routed to '{org.name}' org")
-        # TODO (Phase 2.10): record_trial_lead(sender_email, sender_name, sender_domain, phone)
+        # Capture the lead (best-effort — never blocks the CV).
+        record_trial_lead(
+            email=sender_email,
+            name=payload.FromName,
+            domain=sender_domain,
+            phone=extract_phone(payload.TextBody),
+        )
     else:
         # Normal mode: finding the org by sender domain IS the auth check.
         org = get_organisation_by_domain(sender_domain)

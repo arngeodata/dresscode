@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.routes.inbound import router as inbound_router
 from app.routes.health import router as health_router
-from app.worker import run_worker
+from app.worker import run_worker, run_daily_digest
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,13 +26,16 @@ async def lifespan(app: FastAPI):
     """Start the worker as a background task when the server boots."""
     logger.info("Dresscode starting up...")
     worker_task = asyncio.create_task(run_worker())
+    digest_task = asyncio.create_task(run_daily_digest())
     yield
     logger.info("Dresscode shutting down...")
     worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
+    digest_task.cancel()
+    for task in (worker_task, digest_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(

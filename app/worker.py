@@ -271,7 +271,7 @@ async def process_next_job():
         logger.error(f"Post-delivery metadata scrub failed for job {job_id}: {e}")
 
     logger.info(
-        f"Job {job_id} complete. Candidate: {candidate_name}. "
+        f"Job {job_id} complete. "
         f"Tokens: {tokens_in}/{tokens_out}. "
         f"Formatter: {'node.js' if builder_js_bytes else 'python'}. "
         f"Candidate data deleted after delivery."

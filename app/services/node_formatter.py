@@ -98,8 +98,5 @@ def build_cv_with_node(
         with open(output_path, "rb") as f:
             docx_bytes = f.read()
 
-        logger.info(
-            f"Node.js builder produced {len(docx_bytes):,} bytes "
-            f"for {parsed_cv.candidate.full_name or 'unknown'}"
-        )
+        logger.info(f"Node.js builder produced {len(docx_bytes):,} bytes")
         return docx_bytes

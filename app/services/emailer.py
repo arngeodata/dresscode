@@ -68,7 +68,7 @@ def send_formatted_cv(
         }
         logger.info(
             f"Sending CV email to {to_email} | from={settings.dresscode_from_email} "
-            f"| attachment={attachment_name} ({len(docx_bytes):,} bytes)"
+            f"| ({len(docx_bytes):,} bytes)"
         )
         resp = _requests.post(
             "https://api.postmarkapp.com/email",
@@ -82,7 +82,7 @@ def send_formatted_cv(
         )
         logger.info(f"Postmark response: HTTP {resp.status_code} — {resp.text[:300]}")
         resp.raise_for_status()
-        logger.info(f"Formatted CV sent to {to_email} for candidate: {candidate_name}")
+        logger.info(f"Formatted CV sent to {to_email}")
         return True
 
     except Exception as e:

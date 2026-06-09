@@ -311,6 +311,5 @@ def build_cv_docx(
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
-    logger.info(f"Built DOCX for {cv.candidate.full_name or 'unknown'} "
-                f"({len(cv.experience)} roles, {len(cv.education)} education entries)")
+    logger.info(f"Built DOCX ({len(cv.experience)} roles, {len(cv.education)} education entries)")
     return buf.read()

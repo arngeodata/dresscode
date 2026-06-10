@@ -96,7 +96,6 @@ async def process_next_job():
     org_id            = job["org_id"]
     sender_email      = job["sender_email"]
     input_path        = job["input_path"]
-    original_filename = job.get("original_filename", "cv.pdf")
 
     logger.info(f"Processing job {job_id} for org {org_id}")
 
@@ -145,11 +144,11 @@ async def process_next_job():
         import base64
         content_type = (
             "application/pdf"
-            if original_filename.lower().endswith(".pdf")
+            if input_path.lower().endswith(".pdf")
             else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
         content_b64 = base64.b64encode(file_bytes).decode("utf-8")
-        raw_text = extract_text(content_b64, content_type, original_filename)
+        raw_text = extract_text(content_b64, content_type, input_path)
 
     except Exception as e:
         await _fail_job(job_id, sender_email, f"Text extraction failed: {e}")
@@ -206,10 +205,10 @@ async def process_next_job():
         if filename_format:
             output_filename = filename_format.replace("{name}", candidate_name) + ".docx"
         else:
-            output_filename = original_filename.rsplit(".", 1)[0] + "_formatted.docx"
-        # Sanitize storage key: Supabase rejects en-dashes and other non-ASCII chars
-        storage_filename = output_filename.encode("ascii", "ignore").decode().replace("  ", " ").strip()
-        output_path = f"{org_id}/{job_id}/{storage_filename}"
+            output_filename = f"{candidate_name} - CV.docx"
+        # Neutral storage name — no candidate data in storage or the DB. The
+        # nicely-named file (output_filename) is used only as the email attachment.
+        output_path = f"{org_id}/{job_id}/output.docx"
         supabase.storage.from_("cv-outputs").upload(
             path=output_path,
             file=formatted_bytes,
@@ -279,13 +278,38 @@ async def process_next_job():
 
 
 async def _fail_job(job_id: str, sender_email: str, error_message: str):
-    """Mark a job as failed and send an error email to the consultant."""
+    """
+    Mark a job as failed, DELETE its uploaded CV (failed jobs must not retain
+    candidate data either), and send an error email to the consultant.
+    """
     logger.error(f"Job {job_id} failed: {error_message}")
 
     supabase = get_supabase()
+
+    # Delete any stored candidate data for this failed job (best-effort).
+    try:
+        row = (
+            supabase.table("async_jobs")
+            .select("input_path, org_id")
+            .eq("id", job_id)
+            .single()
+            .execute()
+        )
+        data = row.data or {}
+        in_path = data.get("input_path")
+        fail_org_id = data.get("org_id")
+        if in_path and in_path != "deleted":
+            supabase.storage.from_("cv-inputs").remove([in_path])
+        if fail_org_id:
+            # Output may exist if failure occurred after upload (e.g. email send).
+            supabase.storage.from_("cv-outputs").remove([f"{fail_org_id}/{job_id}/output.docx"])
+    except Exception as e:
+        logger.error(f"Failed-job cleanup error for {job_id}: {e}")
+
     supabase.table("async_jobs").update({
         "status":        "failed",
         "error_message": error_message,
+        "input_path":    "deleted",
         "completed_at":  datetime.now(timezone.utc).isoformat(),
     }).eq("id", job_id).execute()
 

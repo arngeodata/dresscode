@@ -121,7 +121,10 @@ async def handle_inbound(request: Request):
 
     # ── 5. Store the input file in Supabase Storage ───────────────────────────
     job_id = str(uuid.uuid4())
-    input_path = f"{org.id}/{job_id}/{attachment.Name}"
+    # Neutral storage name — never put the candidate's filename in storage or the DB.
+    # Keep the extension so the worker can detect PDF vs Word for extraction.
+    _ext = attachment.Name.rsplit(".", 1)[-1].lower() if "." in attachment.Name else "dat"
+    input_path = f"{org.id}/{job_id}/input.{_ext}"
 
     try:
         file_bytes = base64.b64decode(attachment.Content)
@@ -140,7 +143,6 @@ async def handle_inbound(request: Request):
             "id": job_id,
             "org_id": org.id,
             "sender_email": sender_email,
-            "original_filename": attachment.Name,
             "input_path": input_path,
             "status": "pending",
         }).execute()

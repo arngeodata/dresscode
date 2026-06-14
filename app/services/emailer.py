@@ -22,6 +22,9 @@ def send_formatted_cv(
     docx_bytes: bytes,
     original_filename: str,
     usage_note: str = "",
+    from_address: str | None = None,
+    reply_subject: str | None = None,
+    reply_message_id: str | None = None,
 ) -> bool:
     """
     Email the formatted CV back to the consultant.
@@ -42,6 +45,14 @@ def send_formatted_cv(
     # Use the filename worker.py computed from the org's style_guide filename_format
     attachment_name = original_filename
 
+    # Reply from the address the sender originally wrote to (e.g. trial@/hyperion@),
+    # falling back to the default. Thread as a reply when we have the original Message-ID.
+    sender = from_address or settings.dresscode_from_email
+    subject = (
+        f"Re: {reply_subject}" if reply_subject
+        else f"Your formatted CV is ready — {candidate_name or 'Candidate'}"
+    )
+
     body_text = (
         f"Hi,\n\n"
         f"Your formatted CV for {candidate_name or 'the candidate'} is attached.\n\n"
@@ -54,9 +65,9 @@ def send_formatted_cv(
         import requests as _requests
         content_b64 = base64.b64encode(docx_bytes).decode("utf-8")
         payload = {
-            "From": f"Dresscode <{settings.dresscode_from_email}>",
+            "From": f"Dresscode <{sender}>",
             "To": to_email,
-            "Subject": f"Your formatted CV is ready — {candidate_name or 'Candidate'}",
+            "Subject": subject,
             "TextBody": body_text,
             "Attachments": [
                 {
@@ -66,8 +77,14 @@ def send_formatted_cv(
                 }
             ],
         }
+        if reply_message_id:
+            # Thread into the original conversation — improves deliverability.
+            payload["Headers"] = [
+                {"Name": "In-Reply-To", "Value": reply_message_id},
+                {"Name": "References", "Value": reply_message_id},
+            ]
         logger.info(
-            f"Sending CV email to {to_email} | from={settings.dresscode_from_email} "
+            f"Sending CV email to {to_email} | from={sender} "
             f"| ({len(docx_bytes):,} bytes)"
         )
         resp = _requests.post(

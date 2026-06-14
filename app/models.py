@@ -19,6 +19,14 @@ class PostmarkInboundPayload(BaseModel):
     Subject: Optional[str] = ""
     TextBody: Optional[str] = ""
     Attachments: list[PostmarkAttachment] = []
+    Headers: list[dict] = []
+
+    def original_message_id(self) -> Optional[str]:
+        """The original email's RFC Message-ID (from headers), used for reply threading."""
+        for h in self.Headers:
+            if (h.get("Name") or "").lower() == "message-id":
+                return h.get("Value")
+        return None
 
     def agency_username(self) -> str:
         """Extract the username portion of the recipient address, e.g. 'acme' from 'acme@dresscode.com'."""

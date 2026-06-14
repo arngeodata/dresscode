@@ -96,6 +96,9 @@ async def process_next_job():
     org_id            = job["org_id"]
     sender_email      = job["sender_email"]
     input_path        = job["input_path"]
+    reply_to_address  = job.get("reply_to_address")
+    reply_subject     = job.get("reply_subject")
+    reply_message_id  = job.get("reply_message_id")
 
     logger.info(f"Processing job {job_id} for org {org_id}")
 
@@ -232,6 +235,9 @@ async def process_next_job():
         docx_bytes=formatted_bytes,
         original_filename=output_filename,
         usage_note=usage_note,
+        from_address=reply_to_address,
+        reply_subject=reply_subject,
+        reply_message_id=reply_message_id,
     )
 
     if not sent:
@@ -265,6 +271,8 @@ async def process_next_job():
             "original_filename": None,
             "input_path":        "deleted",
             "output_path":       "deleted",
+            "reply_subject":     None,
+            "reply_message_id":  None,
         }).eq("id", job_id).execute()
     except Exception as e:
         logger.error(f"Post-delivery metadata scrub failed for job {job_id}: {e}")

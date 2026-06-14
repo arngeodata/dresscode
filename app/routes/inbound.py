@@ -145,6 +145,10 @@ async def handle_inbound(request: Request):
             "sender_email": sender_email,
             "input_path": input_path,
             "status": "pending",
+            # Reply-threading: reply from the address they wrote to, in their thread.
+            "reply_to_address": recipient,
+            "reply_subject": payload.Subject,
+            "reply_message_id": payload.original_message_id(),
         }).execute()
     except Exception as e:
         logger.error(f"Failed to queue job: {e}")

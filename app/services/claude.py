@@ -17,6 +17,7 @@ Rules:
 - Use null for any field not present in the CV.
 - Preserve the original wording of job descriptions and achievements exactly — do not summarise or embellish.
 - Standardise all date formats to "Month YYYY" (e.g. "March 2022"). Use "Present" for current roles.
+- Capitalisation: if full_name, job titles, or company/employer names appear in ALL CAPS or are otherwise mis-cased, convert them to natural Title Case, with minor words (of, and, the, for, to, in, etc.) in lower case unless first. PRESERVE genuine acronyms and standard brand capitalisation (e.g. IBM, KPMG, NHS, IKEA, PwC, BBC). Leave already-correctly-cased text unchanged, and keep responsibilities/achievements wording verbatim.
 - If multiple phone numbers exist, use the first mobile number.
 - credentials: extract any post-nominal letters or professional designations that appear after the candidate's name (e.g. "FRICS", "MSc MRICS", "CFA", "PhD"). Do not include these in full_name. If none are present, use null.
 - Skills: preserve the original grouping exactly. If skills appear under category labels (e.g. "Property: x, y, z" or "Software: a, b, c"), keep each group as a single string including its label. If skills are already listed as individual items, keep them as individual items.

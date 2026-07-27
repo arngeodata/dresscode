@@ -7,6 +7,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Install LibreOffice (headless) for reading messy Word INPUT files ─────────
+# Converts .docx/.doc/.rtf → PDF so text-box / legacy .doc content is captured
+# (python-docx silently drops it). Output CVs are still written by the builder.
+# libreoffice-writer pulls the minimal core; fonts-liberation avoids font warnings.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-writer \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────

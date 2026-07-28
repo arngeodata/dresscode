@@ -53,8 +53,9 @@ def extract_text(content_b64: str, content_type: str, filename: str) -> str:
     elif (
         "word" in ct
         or "openxmlformats" in ct
+        or "opendocument" in ct
         or "rtf" in ct
-        or fn.endswith((".docx", ".doc", ".rtf"))
+        or fn.endswith((".docx", ".doc", ".rtf", ".odt"))
     ):
         return _extract_from_word(file_bytes, fn)
     else:
@@ -116,7 +117,7 @@ def _extract_via_libreoffice(file_bytes: bytes, filename: str) -> str:
     can't stall the worker.
     """
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in (".docx", ".doc", ".rtf"):
+    if ext not in (".docx", ".doc", ".rtf", ".odt"):
         ext = ".docx"
 
     with tempfile.TemporaryDirectory() as tmp:

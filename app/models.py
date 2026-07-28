@@ -38,7 +38,7 @@ class PostmarkInboundPayload(BaseModel):
         return match.group(1).lower() if match else ""
 
     def first_cv_attachment(self) -> Optional[PostmarkAttachment]:
-        """Return the first PDF or DOCX attachment, or None."""
+        """Return the first PDF, Word, ODT or RTF attachment, or None."""
         for att in self.Attachments:
             ct = att.ContentType.lower()
             name = att.Name.lower()
@@ -46,9 +46,13 @@ class PostmarkInboundPayload(BaseModel):
                 "pdf" in ct
                 or "word" in ct
                 or "openxmlformats" in ct
+                or "opendocument" in ct
+                or "rtf" in ct
                 or name.endswith(".pdf")
                 or name.endswith(".docx")
                 or name.endswith(".doc")
+                or name.endswith(".odt")
+                or name.endswith(".rtf")
             ):
                 return att
         return None

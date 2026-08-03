@@ -1,6 +1,18 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 import re
+
+
+def _none_to_list(v):
+    """Coerce a null value into an empty list.
+
+    Claude sometimes returns ``null`` for a list field when a CV has no data
+    for it (e.g. no Education or Languages section). Pydantic's list defaults
+    only apply when the key is ABSENT — an explicit ``null`` is rejected and
+    fails validation, which kills the whole job. This keeps the pipeline robust
+    by treating ``null`` the same as an empty list.
+    """
+    return [] if v is None else v
 
 
 # ── Postmark inbound webhook payload ──────────────────────────────────────────
@@ -76,6 +88,8 @@ class ExperienceEntry(BaseModel):
     end_date: Optional[str] = None
     responsibilities: list[str] = []
 
+    _coerce_responsibilities = field_validator("responsibilities", mode="before")(_none_to_list)
+
 
 class EducationEntry(BaseModel):
     institution: Optional[str] = None
@@ -87,6 +101,8 @@ class ExtraSection(BaseModel):
     title: str
     items: list[str] = []  # paragraphs and bullet points in order
 
+    _coerce_items = field_validator("items", mode="before")(_none_to_list)
+
 
 class ParsedCV(BaseModel):
     candidate: CandidateContact = CandidateContact()
@@ -96,6 +112,13 @@ class ParsedCV(BaseModel):
     skills: list[str] = []
     languages: list[str] = []
     extra_sections: list[ExtraSection] = []
+
+    # Claude may return null for any of these when a section is absent; treat
+    # null as an empty list so a missing section never fails the whole job.
+    _coerce_lists = field_validator(
+        "experience", "education", "skills", "languages", "extra_sections",
+        mode="before",
+    )(_none_to_list)
 
 
 # ── Internal job record ───────────────────────────────────────────────────────

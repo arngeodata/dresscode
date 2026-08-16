@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     postmark_server_token: str = "REPLACE_WITH_POSTMARK_SERVER_TOKEN"
     postmark_inbound_webhook_token: str = "REPLACE_WITH_WEBHOOK_SECRET"  # Optional — for verifying inbound webhooks
     dresscode_domain: str = "dresscode.com"
-    dresscode_from_email: str = "george@hyperion-partners.co.uk"
-    dresscode_support_email: str = "george@hyperion-partners.co.uk"  # support@cvdresscode.com mailbox doesn't exist yet
+    dresscode_from_email: str = "noreply@cvdresscode.com"  # fallback sender only; real replies send from the address written to (trial@/hyperion@). Must be a Postmark-verified domain (cvdresscode.com)
+    dresscode_support_email: str = "george@getcvdresscode.com"  # shown in reply footers. NB: cvdresscode.com can't host a mailbox (MX = Postmark catch-all), so support lives on getcvdresscode.com
     trial_username: str = "trial"  # local-part of the public lead-magnet inbox: trial@cvdresscode.com
     digest_to_email: str = "george@hyperion-partners.co.uk"  # daily trial-lead digest recipient
     digest_hour_utc: int = 7  # hour (UTC) to send the daily trial-lead digest (~7-8am UK)

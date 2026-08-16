@@ -25,6 +25,7 @@ def send_formatted_cv(
     from_address: str | None = None,
     reply_subject: str | None = None,
     reply_message_id: str | None = None,
+    trial_cta: str = "",
 ) -> bool:
     """
     Email the formatted CV back to the consultant.
@@ -57,6 +58,7 @@ def send_formatted_cv(
         f"Hi,\n\n"
         f"Your formatted CV for {candidate_name or 'the candidate'} is attached.\n\n"
         + (f"{usage_note}\n\n" if usage_note else "")
+        + (f"{trial_cta}\n\n" if trial_cta else "")
         + f"— Dresscode\n"
         f"{settings.dresscode_support_email}"
     )

@@ -229,6 +229,12 @@ async def process_next_job():
     # Usage line for the email reflects the count AFTER this CV (current + 1).
     # Suppressed for public trial jobs (the recipient isn't a paying customer).
     usage_note = "" if is_trial_job else build_usage_note(org_tier, org_cv_count + 1, org_cv_limit)
+    # Trial replies (only) get a soft CTA + booking link — the recipient just engaged.
+    trial_cta = (
+        "Want this on every CV your team sends, in your agency's exact house style? "
+        "Just reply and I'll set it up.\n\n"
+        "Prefer a quick chat? Grab a time here: https://cal.com/cvdresscode/30min"
+    ) if is_trial_job else ""
     sent = send_formatted_cv(
         to_email=sender_email,
         candidate_name=candidate_name,
@@ -238,6 +244,7 @@ async def process_next_job():
         from_address=reply_to_address,
         reply_subject=reply_subject,
         reply_message_id=reply_message_id,
+        trial_cta=trial_cta,
     )
 
     if not sent:

@@ -231,7 +231,7 @@ async def process_next_job():
     usage_note = "" if is_trial_job else build_usage_note(org_tier, org_cv_count + 1, org_cv_limit)
     # Trial replies (only) get a soft CTA + booking link — the recipient just engaged.
     trial_cta = (
-        "Want this on every CV your team sends, in your agency's exact house style? "
+        "Want this on every CV your team sends, in your agency's own style? "
         "Just reply and I'll set it up.\n\n"
         "Prefer a quick chat? Grab a time here: https://cal.com/cvdresscode/30min"
     ) if is_trial_job else ""

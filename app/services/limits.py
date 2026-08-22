@@ -120,8 +120,14 @@ def build_usage_note(tier: str, count: int, cv_limit: int | None) -> str:
 
 def days_left_in_trial(trial_ends_at: str | None) -> int | None:
     """
-    Whole days remaining in a pilot window, rounded up so the final day reads
-    "1 day left" rather than "0". None if there's no end date or it won't parse.
+    Whole days remaining in a pilot window. None if there's no end date or it
+    won't parse.
+
+    Rounded DOWN, deliberately. A trial invited on 24 Aug and ending end-of-day
+    23 Sep spans 31 calendar days, so rounding up tells a 30-day trial it has 31
+    days left on the morning it starts. Floor gives the number people mean: 30
+    on day zero, 15 on the day-15 call, and 0 — "Last day of your trial" — on
+    the final day.
     """
     if not trial_ends_at:
         return None
@@ -132,7 +138,7 @@ def days_left_in_trial(trial_ends_at: str | None) -> int | None:
     except (TypeError, ValueError):
         return None
     secs = (ends - datetime.now(timezone.utc)).total_seconds()
-    return max(0, math.ceil(secs / 86400))
+    return max(0, math.floor(secs / 86400))
 
 
 def build_pilot_usage_note(count: int, cv_limit: int | None, trial_ends_at: str | None) -> str:

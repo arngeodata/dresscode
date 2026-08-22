@@ -22,7 +22,11 @@ from app.services.claude import parse_cv
 from app.services.formatter import build_cv_docx
 from app.services.node_formatter import build_cv_with_node
 from app.services.emailer import send_formatted_cv, send_error_email
-from app.services.limits import increment_cv_count, build_usage_note
+from app.services.limits import (
+    increment_cv_count,
+    build_usage_note,
+    build_pilot_usage_note,
+)
 from app.services.trial_leads import send_daily_digest
 from app.services.pilot_digest import send_pilot_digest
 
@@ -120,7 +124,7 @@ async def process_next_job():
     try:
         org_result = (
             supabase.table("organisations")
-            .select("name, style_guide, cv_count, cv_limit, tier, email_username")
+            .select("name, style_guide, cv_count, cv_limit, tier, email_username, trial_ends_at")
             .eq("id", org_id)
             .single()
             .execute()
@@ -135,6 +139,10 @@ async def process_next_job():
         org_cv_limit = org_result.data.get("cv_limit")
         org_tier     = org_result.data.get("tier", "")
         org_email_username = (org_result.data.get("email_username") or "")
+        org_trial_ends_at  = org_result.data.get("trial_ends_at")
+        # Pilot accounts: 25 CVs, 30 days, no package and no overage. They get
+        # their own usage line and George's personal sign-off, not the brand's.
+        is_pilot = (org_tier or "").lower() == "pilot"
         # Public trial jobs get NO "CV X/50 included in your package" line.
         is_trial_job = org_email_username.lower() == get_settings().trial_username.lower()
         # Slug used for human-readable Storage folder names (e.g. "Hyperion Partners" → "hyperion-partners")
@@ -239,13 +247,33 @@ async def process_next_job():
     # ── Send formatted CV by email ─────────────────────────────────────────────
     # Usage line for the email reflects the count AFTER this CV (current + 1).
     # Suppressed for public trial jobs (the recipient isn't a paying customer).
-    usage_note = "" if is_trial_job else build_usage_note(org_tier, org_cv_count + 1, org_cv_limit)
+    cv_number = org_cv_count + 1
+    if is_trial_job:
+        usage_note = ""
+    elif is_pilot:
+        usage_note = build_pilot_usage_note(cv_number, org_cv_limit, org_trial_ends_at)
+    else:
+        usage_note = build_usage_note(org_tier, cv_number, org_cv_limit)
+
     # Trial replies (only) get a soft CTA + booking link — the recipient just engaged.
     trial_cta = (
         "Want this on every CV your team sends, in your agency's own style? "
         "Just reply and I'll set it up.\n\n"
         "Prefer a quick chat? Grab a time here: https://cal.com/cvdresscode/30min"
     ) if is_trial_job else ""
+
+    # Pilots: ask for the template feedback on the first three CVs only. After
+    # that it's wallpaper, and a pilot inbox isn't monitored for replies — the
+    # booking link in the signature is the only route back to a human.
+    signature = ""
+    if is_pilot:
+        if cv_number <= 3:
+            trial_cta = "Anything you'd change about how it looks? Book a call with me below."
+        signature = (
+            "George\n"
+            f"{get_settings().dresscode_support_email}\n"
+            "Book a call with me -  https://cal.com/cvdresscode/30min"
+        )
     sent = send_formatted_cv(
         to_email=sender_email,
         candidate_name=candidate_name,
@@ -256,6 +284,7 @@ async def process_next_job():
         reply_subject=reply_subject,
         reply_message_id=reply_message_id,
         trial_cta=trial_cta,
+        signature=signature,
     )
 
     if not sent:

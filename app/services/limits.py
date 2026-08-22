@@ -4,6 +4,7 @@ All limit enforcement happens before a job is queued.
 """
 
 import logging
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass
@@ -115,6 +116,44 @@ def build_usage_note(tier: str, count: int, cv_limit: int | None) -> str:
     return (
         f"This is CV {count} — {over} over your {cv_limit} included this month{rate_txt}."
     )
+
+
+def days_left_in_trial(trial_ends_at: str | None) -> int | None:
+    """
+    Whole days remaining in a pilot window, rounded up so the final day reads
+    "1 day left" rather than "0". None if there's no end date or it won't parse.
+    """
+    if not trial_ends_at:
+        return None
+    try:
+        ends = datetime.fromisoformat(str(trial_ends_at).replace("Z", "+00:00"))
+        if ends.tzinfo is None:
+            ends = ends.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    secs = (ends - datetime.now(timezone.utc)).total_seconds()
+    return max(0, math.ceil(secs / 86400))
+
+
+def build_pilot_usage_note(count: int, cv_limit: int | None, trial_ends_at: str | None) -> str:
+    """
+    Two-line usage block for pilot accounts:
+
+        CV 3 of 25
+        18 days left in your trial
+
+    Deliberately not the paying-customer note — a pilot has no package and no
+    overage, so "included in your package this month" would be wrong on both
+    counts. The day count is the line that actually moves people.
+    """
+    lines = [f"CV {count} of {cv_limit}" if cv_limit else f"CV {count}"]
+    days = days_left_in_trial(trial_ends_at)
+    if days is not None:
+        lines.append(
+            "Last day of your trial" if days == 0
+            else f"{days} day{'s' if days != 1 else ''} left in your trial"
+        )
+    return "\n".join(lines)
 
 
 def increment_cv_count(org_id: str) -> int:

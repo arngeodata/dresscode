@@ -26,6 +26,7 @@ def send_formatted_cv(
     reply_subject: str | None = None,
     reply_message_id: str | None = None,
     trial_cta: str = "",
+    signature: str = "",
 ) -> bool:
     """
     Email the formatted CV back to the consultant.
@@ -35,8 +36,11 @@ def send_formatted_cv(
         candidate_name: Used in subject line
         docx_bytes: The formatted DOCX file as bytes
         original_filename: Original filename, used to name the attachment
-        usage_note: Optional one-line usage summary (e.g. "This is CV 47/50
-            included in your package this month.") shown above the signature.
+        usage_note: Optional usage summary (e.g. "This is CV 47/50 included in
+            your package this month.") shown above the signature.
+        signature: Optional replacement for the default "— Dresscode" sign-off.
+            Pilot accounts sign from George personally — they get a call from
+            him on day 15, so the emails shouldn't come from a brand.
 
     Returns:
         True if sent successfully
@@ -59,8 +63,8 @@ def send_formatted_cv(
         f"Your formatted CV for {candidate_name or 'the candidate'} is attached.\n\n"
         + (f"{usage_note}\n\n" if usage_note else "")
         + (f"{trial_cta}\n\n" if trial_cta else "")
-        + f"— Dresscode\n"
-        f"{settings.dresscode_support_email}"
+        + (signature if signature else
+           f"— Dresscode\n{settings.dresscode_support_email}")
     )
 
     try:

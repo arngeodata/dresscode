@@ -172,7 +172,7 @@ def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_lim
         f"Hi {org_name},\n\n"
         f"You've used {cv_count} of your {cv_limit} monthly CVs — "
         f"just {remaining} remaining.\n\n"
-        f"To avoid interruption, upgrade your plan at dresscode.com/billing.\n\n"
+        f"To avoid interruption, upgrade your plan here: {settings.billing_url}\n\n"
         "— Dresscode"
     )
 
@@ -198,7 +198,7 @@ def send_limit_reached_email(to_email: str, org_name: str, cv_limit: int) -> boo
         f"Hi {org_name},\n\n"
         f"You've reached your {cv_limit} CV limit for this month. "
         f"CVs sent to Dresscode will not be processed until your limit resets or you upgrade.\n\n"
-        f"Upgrade your plan at dresscode.com/billing — takes 60 seconds.\n\n"
+        f"Upgrade your plan here — takes 60 seconds: {settings.billing_url}\n\n"
         "— Dresscode"
     )
 
@@ -239,6 +239,55 @@ def send_not_authorised_email(to_email: str, dresscode_address: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Failed to send not-authorised email to {to_email}: {e}")
+        return False
+
+
+def send_trial_expired_email(
+    to_email: str,
+    org_name: str,
+    cv_count: int,
+    cv_limit: int | None,
+) -> bool:
+    """
+    Tell a pilot account their 30-day window has closed.
+
+    This is the last email the account ever sends, so it does a job: it states
+    what they actually used (the number is the argument) and makes carrying on
+    a reply rather than a signup flow.
+    """
+    settings = get_settings()
+
+    used = f"{cv_count} CV{'s' if cv_count != 1 else ''}"
+    used_line = (
+        f"You put {used} through it during the trial.\n\n"
+        if cv_count else
+        "The inbox went unused during the trial, so this may be no loss at all.\n\n"
+    )
+
+    body_text = (
+        f"Hi,\n\n"
+        f"The 30-day Dresscode trial for {org_name} has ended, so this inbox has "
+        f"stopped formatting CVs. Nothing has been deleted — your template and "
+        f"branding are still set up exactly as they were.\n\n"
+        f"{used_line}"
+        f"To switch it back on, just reply to this email and I'll do it today. "
+        f"Plans and pricing are at https://cvdresscode.com if you'd rather look "
+        f"first, or reach me directly at {settings.dresscode_support_email}.\n\n"
+        "— Dresscode"
+    )
+
+    try:
+        client = _postmark_client()
+        client.emails.send(
+            From=f"Dresscode <{settings.dresscode_from_email}>",
+            To=to_email,
+            Subject=f"Your Dresscode trial has ended — {org_name}",
+            TextBody=body_text,
+        )
+        logger.info(f"Trial-expired email sent to {to_email} ({org_name})")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send trial-expired email to {to_email}: {e}")
         return False
 
 

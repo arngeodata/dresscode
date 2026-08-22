@@ -24,6 +24,7 @@ from app.services.node_formatter import build_cv_with_node
 from app.services.emailer import send_formatted_cv, send_error_email
 from app.services.limits import increment_cv_count, build_usage_note
 from app.services.trial_leads import send_daily_digest
+from app.services.pilot_digest import send_pilot_digest
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,8 @@ async def run_worker():
 async def run_daily_digest():
     """
     Once per day (around settings.digest_hour_utc), email George the trial-lead
-    digest. Checks every 5 minutes; an in-memory guard prevents double-sends.
+    digest and the pilot-cohort digest. Checks every 5 minutes; an in-memory
+    guard prevents double-sends.
 
     Note: the guard resets on redeploy, so a redeploy during the digest hour
     could send a second copy that day — harmless. send_daily_digest() also
@@ -64,6 +66,15 @@ async def run_daily_digest():
             if now.hour == settings.digest_hour_utc and last_sent_date != now.date():
                 logger.info("Running daily trial-lead digest...")
                 send_daily_digest()
+
+                # Pilot cohort digest. Separate try/except so a failure in one
+                # digest can't stop the other - they are independent reports.
+                try:
+                    logger.info("Running daily pilot digest...")
+                    send_pilot_digest()
+                except Exception as e:
+                    logger.error(f"Pilot digest error: {e}", exc_info=True)
+
                 last_sent_date = now.date()
         except Exception as e:
             logger.error(f"Daily digest error: {e}", exc_info=True)

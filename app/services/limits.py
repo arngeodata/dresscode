@@ -4,6 +4,7 @@ All limit enforcement happens before a job is queued.
 """
 
 import logging
+from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass
 from app.database import get_supabase
@@ -17,6 +18,7 @@ class LimitStatus(Enum):
     OK = "ok"                       # Comfortably within the included allowance
     APPROACHING_CAP = "approaching" # 90%+ of allowance used — process + notify
     OVER_CAP = "over_cap"           # Allowance used up — process, bill overage per CV
+    EXPIRED = "expired"             # Pilot/trial window has closed — REJECT, do not process
 
 
 @dataclass
@@ -38,7 +40,31 @@ def check_limits(org: Organisation) -> LimitCheck:
 
     To reintroduce a hard stop (e.g. to bound overage on small Starter
     accounts), add a new status here and have the caller reject on it.
+
+    The one exception is EXPIRED: a pilot account past its trial_ends_at is
+    rejected outright by the caller. That is the only hard stop in the system.
     """
+    # Pilot/trial window closed — the one status the caller must reject on.
+    # Checked before the allowance because an expired account has no allowance
+    # left to reason about, however many CVs are unused.
+    if org.trial_ends_at:
+        try:
+            ends = datetime.fromisoformat(str(org.trial_ends_at).replace("Z", "+00:00"))
+            if ends.tzinfo is None:
+                ends = ends.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > ends:
+                return LimitCheck(
+                    status=LimitStatus.EXPIRED,
+                    org=org,
+                    message=(
+                        f"{org.name} trial ended {ends:%-d %b %Y} "
+                        f"({org.cv_count}/{org.cv_limit} used) — rejecting"
+                    ),
+                )
+        except (TypeError, ValueError) as e:
+            # A malformed date is our bug, not the sender's — never block a CV on it.
+            logger.error("Unparseable trial_ends_at for %s: %r (%s)", org.name, org.trial_ends_at, e)
+
     # No cap set → treat as within allowance (usage is still metered downstream).
     if org.cv_limit is None:
         return LimitCheck(status=LimitStatus.OK, org=org)

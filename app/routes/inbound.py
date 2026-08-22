@@ -22,6 +22,7 @@ from app.services.emailer import (
     send_not_authorised_email,
     send_no_attachment_email,
     send_limit_warning_email,
+    send_trial_expired_email,
 )
 from app.services.trial_leads import record_trial_lead, extract_phone
 
@@ -103,10 +104,18 @@ async def handle_inbound(request: Request):
 
     # ── 4. Check usage limits (customer orgs only — never for the public trial) ─
     # Pricing model is "flat fee + overage" — we no longer reject at the cap.
+    # The sole rejection is an expired pilot account (LimitStatus.EXPIRED).
     # Every CV is processed; usage above the included allowance is billed per-CV
     # via Stripe metering (see limits.increment_cv_count / billing.report_cv_usage).
     if not is_trial:
         limit_check = check_limits(org)
+
+        if limit_check.status == LimitStatus.EXPIRED:
+            # Pilot window closed. The ONE case where a CV is not processed:
+            # reject before the file is stored or a job is queued.
+            logger.info(limit_check.message)
+            send_trial_expired_email(sender_email, org.name, org.cv_count, org.cv_limit)
+            return {"status": "rejected", "reason": "trial_expired"}
 
         if limit_check.status == LimitStatus.OVER_CAP:
             # Over the included allowance — process anyway, overage is metered/billed.

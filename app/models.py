@@ -147,3 +147,6 @@ class Organisation(BaseModel):
     active: bool
     stripe_customer_id: Optional[str] = None  # keys Stripe meter events; None for free/test orgs
     stripe_sub_id: Optional[str] = None
+    # Pilot/trial accounts only. When set and in the past, the inbox stops
+    # formatting (see limits.check_limits). None on normal paying customers.
+    trial_ends_at: Optional[str] = None

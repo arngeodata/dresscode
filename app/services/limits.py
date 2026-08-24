@@ -218,19 +218,23 @@ def get_organisation_by_domain(sender_domain: str) -> Organisation | None:
     """
     supabase = get_supabase()
 
+    # limit(1), not maybe_single(): PostgREST answers maybe_single() with HTTP
+    # 406 when nothing matches, and supabase-py raises on it. Every email from
+    # an unrecognised domain - spam, probes, Postmark's own webhook test - then
+    # returned a 500 instead of being quietly ignored.
     result = (
         supabase.table("organisations")
         .select("*")
         .contains("allowed_domains", [sender_domain.lower().strip()])
         .eq("active", True)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         return None
 
-    return Organisation(**result.data)
+    return Organisation(**result.data[0])
 
 
 def get_organisation_by_email_username(username: str) -> Organisation | None:
@@ -250,11 +254,11 @@ def get_organisation_by_email_username(username: str) -> Organisation | None:
         .select("*")
         .eq("email_username", username.lower().strip())
         .eq("active", True)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         return None
 
-    return Organisation(**result.data)
+    return Organisation(**result.data[0])

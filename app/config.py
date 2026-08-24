@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     dresscode_from_email: str = "noreply@cvdresscode.com"  # fallback sender only; real replies send from the address written to (trial@/hyperion@). Must be a Postmark-verified domain (cvdresscode.com)
     dresscode_support_email: str = "george@getcvdresscode.com"  # shown in reply footers. NB: cvdresscode.com can't host a mailbox (MX = Postmark catch-all), so support lives on getcvdresscode.com
     trial_username: str = "trial"  # local-part of the public lead-magnet inbox: trial@cvdresscode.com
+    # Where "upgrade your plan" links point. Set to the Stripe Customer Portal login link
+    # (Stripe → Settings → Billing → Customer portal → enable plan switching → copy the login link,
+    # e.g. https://billing.stripe.com/p/login/xxxxxxxx). Do NOT use a Payment Link (that starts a
+    # NEW subscription and double-bills existing customers). Overridable via env BILLING_URL.
+    billing_url: str = "https://billing.stripe.com/p/login/8x23cvaMAfse9ox5o3afS00"
     digest_to_email: str = "george@hyperion-partners.co.uk"  # daily trial-lead digest recipient
     digest_hour_utc: int = 7  # hour (UTC) to send the daily trial-lead digest (~7-8am UK)
 

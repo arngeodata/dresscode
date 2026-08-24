@@ -13,7 +13,7 @@ Formatting pipeline:
 import asyncio
 import logging
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.config import get_settings
 from app.database import get_supabase
@@ -86,28 +86,126 @@ async def run_daily_digest():
         await asyncio.sleep(300)  # check every 5 minutes
 
 
+# ── Retry policy ──────────────────────────────────────────────────────────────
+# A CV is a customer's only copy. Before this, ANY error - a five second network
+# blip, Postmark hiccuping, Claude returning a 529 - marked the job failed and
+# DELETED the uploaded file. The consultant had to notice and resend.
+#
+# Now a transient error puts the job back in the queue with a backoff and keeps
+# the file. An outage becomes a delay nobody notices. Only a genuinely broken
+# input, or running out of attempts, deletes anything.
+MAX_ATTEMPTS = 5
+BACKOFF_MINUTES = [1, 5, 15, 45]        # wait before attempt 2, 3, 4, 5
+LEASE_MINUTES = 15                      # a claimed job left this long is assumed
+                                        # abandoned (worker crashed) and re-queued
+
+# Substrings that mean "the other end had a moment", not "this input is bad".
+_TRANSIENT_HINTS = (
+    "timeout", "timed out", "connection", "connect", "reset by peer", "broken pipe",
+    "temporarily unavailable", "service unavailable", "bad gateway", "gateway timeout",
+    "overloaded", "rate limit", "rate_limit", "too many requests", "capacity",
+    "429", "500", "502", "503", "504", "529",
+    "internal server error", "remote disconnected", "eof occurred", "ssl",
+)
+
+
+# Substrings that mean "this input is broken" - retrying wastes 45 minutes and
+# still tells the consultant to resend, so say so now.
+_PERMANENT_HINTS = (
+    "invalid json", "not valid json", "validation error", "validationerror",
+    "unsupported", "corrupt", "password", "encrypted", "no text could be",
+    "empty document", "cannot parse", "unable to extract",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    """
+    Worth trying again, or not?
+
+    Deliberately conservative: something we don't recognise is treated as
+    transient, because retrying a permanent problem costs a few minutes and one
+    email, while hard-failing a transient one destroys a customer's CV.
+    """
+    name = type(exc).__name__.lower()
+    text = f"{name} {exc}".lower()
+    if any(h in text for h in _PERMANENT_HINTS):
+        return False
+    if any(h in text for h in _TRANSIENT_HINTS):
+        return True
+    # Anything that looks like a network or HTTP client error
+    if any(k in name for k in ("timeout", "connection", "network", "apierror",
+                               "httperror", "readerror", "remoteprotocol")):
+        return True
+    return True   # default: give it another go
+
+
+async def _requeue_job(job_id: str, attempts: int, error_message: str) -> bool:
+    """
+    Put a job back in the queue with a backoff. Keeps the uploaded file.
+    Returns True if it was requeued, False if it is out of attempts.
+    """
+    if attempts >= MAX_ATTEMPTS:
+        return False
+
+    wait = BACKOFF_MINUTES[min(attempts - 1, len(BACKOFF_MINUTES) - 1)]
+    when = datetime.now(timezone.utc) + timedelta(minutes=wait)
+
+    get_supabase().table("async_jobs").update({
+        "status":          "pending",
+        "attempts":        attempts,
+        "next_attempt_at": when.isoformat(),
+        "last_error":      error_message[:500],
+    }).eq("id", job_id).execute()
+
+    logger.warning(
+        f"Job {job_id} attempt {attempts}/{MAX_ATTEMPTS} failed ({error_message[:120]}). "
+        f"Retrying in {wait} min. CV retained."
+    )
+    return True
+
+
+async def _handle_error(job_id, sender_email, attempts, label, exc, permanent=False):
+    """
+    Something went wrong mid-job. Retry it, or give up and tell the consultant.
+
+    Every failure in process_next_job routes through here so there is exactly
+    one place that decides, rather than nine scattered calls to _fail_job.
+    """
+    message = f"{label}: {exc}"
+    if not permanent and _is_transient(exc):
+        if await _requeue_job(job_id, attempts, message):
+            return
+        message = f"{message} (gave up after {MAX_ATTEMPTS} attempts)"
+    await _fail_job(job_id, sender_email, message)
+
+
 async def process_next_job():
     """
     Pick up the oldest pending job, process it end-to-end, and mark it complete or failed.
     If no jobs are pending, returns immediately.
     """
     supabase = get_supabase()
+    now = datetime.now(timezone.utc)
 
-    # Claim the next pending job
+    # Claim the oldest job that is due. "Due" means pending with no backoff
+    # pending, OR left in 'processing' past its lease - which means the worker
+    # that had it died, and nobody else is coming for it.
     result = (
         supabase.table("async_jobs")
         .select("*")
-        .eq("status", "pending")
+        .in_("status", ["pending", "processing"])
+        .or_(f"next_attempt_at.is.null,next_attempt_at.lte.{now.isoformat()}")
         .order("created_at", desc=False)
         .limit(1)
         .execute()
     )
 
     if not result.data:
-        return  # Nothing to do
+        return  # Nothing due
 
     job = result.data[0]
     job_id            = job["id"]
+    attempts          = (job.get("attempts") or 0) + 1
     org_id            = job["org_id"]
     sender_email      = job["sender_email"]
     input_path        = job["input_path"]
@@ -117,8 +215,18 @@ async def process_next_job():
 
     logger.info(f"Processing job {job_id} for org {org_id}")
 
-    # Mark as processing
-    supabase.table("async_jobs").update({"status": "processing"}).eq("id", job_id).execute()
+    if job.get("status") == "processing":
+        logger.warning(f"Job {job_id} was left in 'processing' - reclaiming (attempt {attempts})")
+
+    # Mark as processing and take a lease. If this worker dies, the lease
+    # expires and the job is picked up again rather than sitting there forever.
+    supabase.table("async_jobs").update({
+        "status":          "processing",
+        "attempts":        attempts,
+        "next_attempt_at": (now + timedelta(minutes=LEASE_MINUTES)).isoformat(),
+    }).eq("id", job_id).execute()
+
+    logger.info(f"Job {job_id} attempt {attempts}/{MAX_ATTEMPTS}")
 
     # ── Fetch style guide for this organisation ────────────────────────────────
     try:
@@ -151,14 +259,14 @@ async def process_next_job():
                     f"({'custom' if style_guide else 'default'})")
 
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"Organisation fetch failed: {e}")
+        await _handle_error(job_id, sender_email, attempts, "Organisation fetch failed", e)
         return
 
     # ── Download the input CV from storage ─────────────────────────────────────
     try:
         file_bytes = supabase.storage.from_("cv-inputs").download(input_path)
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"Input file download failed: {e}")
+        await _handle_error(job_id, sender_email, attempts, "Input file download failed", e)
         return
 
     # ── Extract text ───────────────────────────────────────────────────────────
@@ -173,14 +281,17 @@ async def process_next_job():
         raw_text = extract_text(content_b64, content_type, input_path)
 
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"Text extraction failed: {e}")
+        # A file we cannot read will not become readable on the fourth attempt.
+        await _handle_error(job_id, sender_email, attempts, "Text extraction failed", e,
+                            permanent=True)
         return
 
     # ── Parse with Claude ──────────────────────────────────────────────────────
     try:
         parsed_cv, tokens_in, tokens_out = parse_cv(raw_text)
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"Claude parsing failed: {e}")
+        # Overloaded/timeout -> retry. Malformed JSON after its own retries -> stop.
+        await _handle_error(job_id, sender_email, attempts, "Claude parsing failed", e)
         return
 
     # ── Fetch branded header image (if configured in style guide) ─────────────
@@ -212,7 +323,7 @@ async def process_next_job():
         else:
             formatted_bytes = build_cv_docx(parsed_cv, style_guide, header_image_bytes)
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"DOCX formatting failed: {e}")
+        await _handle_error(job_id, sender_email, attempts, "DOCX formatting failed", e)
         return
 
     # ── Upload formatted output ────────────────────────────────────────────────
@@ -241,7 +352,7 @@ async def process_next_job():
             },
         )
     except Exception as e:
-        await _fail_job(job_id, sender_email, f"Output upload failed: {e}")
+        await _handle_error(job_id, sender_email, attempts, "Output upload failed", e)
         return
 
     # ── Send formatted CV by email ─────────────────────────────────────────────
@@ -288,12 +399,14 @@ async def process_next_job():
     )
 
     if not sent:
-        await _fail_job(job_id, sender_email, "Outbound email delivery failed")
+        await _handle_error(job_id, sender_email, attempts, "Outbound email delivery failed",
+                            RuntimeError("Postmark did not accept the message"))
         return
 
     # ── Mark complete ──────────────────────────────────────────────────────────
     supabase.table("async_jobs").update({
         "status":            "complete",
+        "next_attempt_at":   None,     # release the lease
         "output_path":       output_path,
         "claude_tokens_in":  tokens_in,
         "claude_tokens_out": tokens_out,

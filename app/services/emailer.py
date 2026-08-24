@@ -168,19 +168,31 @@ def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
 
 
 def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_limit: int) -> bool:
-    """Send a 90% usage warning to the consultant."""
-    settings = get_settings()
-    remaining = cv_limit - cv_count
+    """
+    Send a 90% usage warning to the consultant.
 
-    body_text = (
-        f"Hi {org_name},\n\n"
-        f"You've used {cv_count} of your {cv_limit} monthly CVs — "
-        f"just {remaining} remaining.\n\n"
-        f"To avoid interruption, upgrade your plan here: {settings.billing_url}\n\n"
-        "— Dresscode"
-    )
-
+    Everything is inside the try, deliberately. This used to build body_text
+    first, so a missing setting raised OUTSIDE the handler, propagated up
+    through inbound.py and returned a 500 to Postmark - a courtesy email taking
+    down CV delivery for the whole account. A notification must never be able
+    to do that.
+    """
     try:
+        settings = get_settings()
+        remaining = cv_limit - cv_count
+        # getattr, not settings.billing_url: if the setting is absent the line
+        # is simply omitted rather than killing the request.
+        billing = getattr(settings, "billing_url", None)
+        upgrade = f"To avoid interruption, upgrade your plan here: {billing}\n\n" if billing else ""
+
+        body_text = (
+            f"Hi {org_name},\n\n"
+            f"You've used {cv_count} of your {cv_limit} monthly CVs - "
+            f"just {remaining} remaining.\n\n"
+            f"{upgrade}"
+            "- Dresscode"
+        )
+
         client = _postmark_client()
         client.emails.send(
             From=f"Dresscode <{settings.dresscode_from_email}>",

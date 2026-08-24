@@ -126,7 +126,13 @@ async def handle_inbound(request: Request):
         elif limit_check.status == LimitStatus.APPROACHING_CAP:
             # Process the CV and warn that the included allowance is nearly used.
             logger.info(f"Approaching allowance for {org.name} ({org.cv_count}/{org.cv_limit})")
-            send_limit_warning_email(sender_email, org.name, org.cv_count, org.cv_limit)
+            # Belt and braces: the warning is a courtesy. If it fails for any
+            # reason the CV must still go through. (It once raised on a missing
+            # setting and returned a 500 to Postmark, stalling the account.)
+            try:
+                send_limit_warning_email(sender_email, org.name, org.cv_count, org.cv_limit)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Limit warning email failed for {org.name}: {e}")
 
     # ── 5. Store the input file in Supabase Storage ───────────────────────────
     job_id = str(uuid.uuid4())

@@ -84,14 +84,18 @@ def record_trial_lead(
     now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
+        # limit(1) rather than maybe_single(): the latter answers HTTP 406 on
+        # zero rows and supabase-py raises. Harmless here because the whole
+        # function is wrapped, but it turned every first-time trial lead into a
+        # logged exception, which buried real errors.
         existing = (
             supabase.table("trial_leads")
             .select("id, sent_count, name, phone, domain")
             .eq("email", email)
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        row = existing.data if existing else None
+        row = existing.data[0] if (existing and existing.data) else None
 
         if row:
             update = {

@@ -78,16 +78,64 @@ def _extract_from_pdf(file_bytes: bytes) -> str:
         )
         text = output.getvalue().strip()
 
-        if not text:
-            raise ValueError("PDF appears to be scanned/image-only — no extractable text found.")
+        if text:
+            return text
 
-        return text
+        # No text layer → likely a scanned / photographed / image-exported PDF.
+        # Try OCR before giving up.
+        from app.config import get_settings
+        if get_settings().ocr_enabled:
+            logger.info("PDF has no text layer; attempting OCR fallback.")
+            ocr_text = _ocr_pdf(file_bytes)
+            if ocr_text:
+                logger.info(f"OCR fallback recovered {len(ocr_text)} chars.")
+                return ocr_text
+
+        raise ValueError("PDF appears to be scanned/image-only — no extractable text found.")
 
     except ImportError:
         raise RuntimeError("pdfminer.six is not installed. Run: pip install pdfminer.six")
     except Exception as e:
         logger.error(f"PDF extraction failed: {e}")
         raise ValueError(f"Could not extract text from PDF: {e}") from e
+
+
+def _ocr_pdf(file_bytes: bytes) -> str:
+    """
+    OCR fallback for PDFs with no text layer (scanned / photographed / image-only).
+    Rasterises each page with pdf2image (poppler) and runs Tesseract via
+    pytesseract. Bounded by ocr_max_pages so a huge file can't stall the worker.
+    Returns extracted text, or "" if OCR is unavailable or finds nothing.
+    """
+    try:
+        import pytesseract
+        from pdf2image import convert_from_bytes
+    except ImportError:
+        logger.warning("OCR libraries not installed (pytesseract / pdf2image); skipping OCR.")
+        return ""
+
+    from app.config import get_settings
+    settings = get_settings()
+
+    try:
+        images = convert_from_bytes(
+            file_bytes,
+            dpi=settings.ocr_dpi,
+            fmt="png",
+            last_page=settings.ocr_max_pages,
+        )
+    except Exception as e:
+        logger.error(f"OCR rasterisation failed: {e}")
+        return ""
+
+    pages = []
+    for i, img in enumerate(images):
+        try:
+            pages.append(pytesseract.image_to_string(img, lang="eng"))
+        except Exception as e:
+            logger.error(f"OCR failed on page {i + 1}: {e}")
+
+    return "\n".join(pages).strip()
 
 
 def _extract_from_word(file_bytes: bytes, filename: str) -> str:

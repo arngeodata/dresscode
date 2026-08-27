@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     stripe_secret_key: str = "REPLACE_WITH_STRIPE_SECRET_KEY"
     stripe_webhook_secret: str = "REPLACE_WITH_STRIPE_WEBHOOK_SECRET"
 
+    # ── OCR fallback (scanned/image-only PDFs) ─────────────────────────────────
+    ocr_enabled: bool = True    # DRESSCODE_OCR_ENABLED — kill-switch, no redeploy needed
+    ocr_max_pages: int = 10     # DRESSCODE_OCR_MAX_PAGES — cap pages OCR'd to bound latency
+    ocr_dpi: int = 300          # DRESSCODE_OCR_DPI — 300 is the accuracy/speed sweet spot
+
     # ── App ───────────────────────────────────────────────────────────────────
     app_env: str = "development"          # development | production
     worker_poll_interval: int = 15        # seconds between job polls

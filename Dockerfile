@@ -16,6 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
+# ── OCR fallback for scanned/image-only PDFs ─────────────────────────────────
+# tesseract-ocr = OCR engine; poppler-utils = pdf2image's pdftoppm rasteriser.
+# Only used when a PDF has no text layer (scanned/photographed CVs).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────

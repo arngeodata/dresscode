@@ -21,6 +21,7 @@ Rules:
 - If multiple phone numbers exist, use the first mobile number.
 - credentials: extract any post-nominal letters or professional designations that appear after the candidate's name (e.g. "FRICS", "MSc MRICS", "CFA", "PhD"). Do not include these in full_name. If none are present, use null.
 - Skills: preserve the original grouping exactly. If skills appear under category labels (e.g. "Property: x, y, z" or "Software: a, b, c"), keep each group as a single string including its label. If skills are already listed as individual items, keep them as individual items.
+- Education: ALWAYS capture both start_date and end_date whenever the entry shows a date range in any form (e.g. "2007 - 2010", "Sep 2018 – Jun 2021", "2018 to 2021", "2019-22") — put the earlier date in start_date and the later in end_date, using the same "Month YYYY" (or just-year) formatting the source uses. Only if the entry shows a single date (one graduation/award year) leave start_date null and put that value in end_date (and year). Put any additional information listed under an education entry — modules, achievements, grades detail, dissertation, activities — as separate strings in details. Leave details empty if none.
 - Any section that is not summary/profile, experience/career history, education, skills, or languages goes into extra_sections. Capture the section title exactly as it appears, and each paragraph or bullet point as a separate item in the items array.
 
 Return this exact structure:
@@ -47,7 +48,10 @@ Return this exact structure:
     {
       "institution": string | null,
       "qualification": string | null,
-      "year": string | null
+      "start_date": string | null,
+      "end_date": string | null,
+      "year": string | null,
+      "details": [string]
     }
   ],
   "skills": [string],

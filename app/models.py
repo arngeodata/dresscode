@@ -94,7 +94,10 @@ class ExperienceEntry(BaseModel):
 class EducationEntry(BaseModel):
     institution: Optional[str] = None
     qualification: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     year: Optional[str] = None
+    details: list[str] = []
 
 
 class ExtraSection(BaseModel):

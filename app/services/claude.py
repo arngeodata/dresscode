@@ -65,6 +65,45 @@ Return this exact structure:
 }"""
 
 
+def _extract_json(content: str) -> dict:
+    """
+    Pull the JSON object out of a model response.
+
+    The system prompt asks for bare JSON, but the model sometimes wraps it in a
+    code fence, prefixes it with a sentence, or appends a note after the closing
+    brace. A plain json.loads() survives none of these — trailing text raises
+    "Extra data", which is what failed the Stephanie So CV on 14 Sep 2026.
+
+    Raises:
+        json.JSONDecodeError: if no JSON object can be read from the response.
+    """
+    text = content.strip()
+
+    # Fenced block: take what is inside the first fence.
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            block = parts[1].lstrip()
+            if block[:4].lower() == "json":
+                block = block[4:]
+            text = block.strip()
+
+    # Drop any prose before the object.
+    start = text.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("No JSON object found in response", text or "", 0)
+    text = text[start:]
+
+    # raw_decode reads the first complete value and ignores anything after it,
+    # so a trailing note no longer fails the parse.
+    obj, _ = json.JSONDecoder().raw_decode(text)
+
+    if not isinstance(obj, dict):
+        raise json.JSONDecodeError("Response was not a JSON object", text, 0)
+
+    return obj
+
+
 def parse_cv(raw_text: str) -> tuple[ParsedCV, int, int]:
     """
     Parse raw CV text using the Claude Haiku API.
@@ -112,14 +151,7 @@ def parse_cv(raw_text: str) -> tuple[ParsedCV, int, int]:
             input_tokens = response.usage.input_tokens
             output_tokens = response.usage.output_tokens
 
-            # Strip markdown code fences if Claude included them despite instructions
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-
-            parsed_dict = json.loads(content)
+            parsed_dict = _extract_json(content)
             parsed_cv = ParsedCV(**parsed_dict)
 
             logger.info(

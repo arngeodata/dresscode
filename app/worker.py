@@ -24,6 +24,7 @@ from app.services.node_formatter import build_cv_with_node
 from app.services.emailer import send_formatted_cv, send_error_email
 from app.services.limits import (
     increment_cv_count,
+    increment_profile_cv_count,
     build_usage_note,
     build_pilot_usage_note,
 )
@@ -209,6 +210,7 @@ async def process_next_job():
     org_id            = job["org_id"]
     sender_email      = job["sender_email"]
     input_path        = job["input_path"]
+    profile_id        = job.get("profile_id")          # set only for reseller accounts
     reply_to_address  = job.get("reply_to_address")
     reply_subject     = job.get("reply_subject")
     reply_message_id  = job.get("reply_message_id")
@@ -254,9 +256,38 @@ async def process_next_job():
         # Public trial jobs get NO "CV X/50 included in your package" line.
         is_trial_job = org_email_username.lower() == get_settings().trial_username.lower()
         # Slug used for human-readable Storage folder names (e.g. "Hyperion Partners" → "hyperion-partners")
+        # NEVER "improve" this line — the builder lookup fails silently if it
+        # disagrees with the Storage folder names.
         org_slug    = org_name.lower().replace(' ', '-').replace("'", '').replace('.', '')
-        logger.info(f"Style guide loaded for '{org_name}' "
-                    f"({'custom' if style_guide else 'default'})")
+
+        # ── Reseller profile overrides ────────────────────────────────────────
+        # For an account like Ally, the style belongs to their end client, not
+        # to them. The slug and style guide come from the profile row instead;
+        # everything else (plan, cap, billing, sender auth) stays on the org.
+        # profile_id is null for every other account, so this block never runs
+        # for them and their behaviour is byte-for-byte unchanged.
+        profile_name = None
+        if profile_id:
+            prof = (
+                supabase.table("org_profiles")
+                .select("name, slug, style_guide")
+                .eq("id", profile_id)
+                .limit(1)
+                .execute()
+            )
+            if prof.data:
+                profile_name = prof.data[0].get("name")
+                org_slug     = prof.data[0].get("slug") or org_slug
+                style_guide  = prof.data[0].get("style_guide") or style_guide
+            else:
+                # The job named a profile that has since gone. Do not fall back
+                # to the account's own style — that would put this client's CV
+                # on the wrong letterhead. Fail so it can be looked at.
+                raise ValueError(f"Job references profile {profile_id}, which no longer exists")
+
+        logger.info(f"Style guide loaded for '{org_name}'"
+                    f"{' / ' + profile_name if profile_name else ''} "
+                    f"({'custom' if style_guide else 'default'}) → slug '{org_slug}'")
 
     except Exception as e:
         await _handle_error(job_id, sender_email, attempts, "Organisation fetch failed", e)
@@ -414,6 +445,10 @@ async def process_next_job():
     }).eq("id", job_id).execute()
 
     increment_cv_count(org_id)
+    # Per-client count, so a reseller can rebill from real numbers. The billing
+    # cap stays on the organisation — this is reporting, not metering.
+    if profile_id:
+        increment_profile_cv_count(profile_id)
 
     # ── Delete-after-delivery (GDPR: "processed transiently, nothing retained") ──
     # The CV has been emailed (from in-memory bytes), so we can safely delete the

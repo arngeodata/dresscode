@@ -120,11 +120,31 @@ def parse_cv(raw_text: str) -> tuple[ParsedCV, int, int]:
     settings = get_settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    # Guard against very long CVs that would exceed max output tokens
-    max_input_chars = 15_000
+    # NOTHING IS EVER TRUNCATED.
+    #
+    # This used to silently cut the text at 15,000 chars and log a warning, so a
+    # long CV came back missing its last roles and nobody was told. Content loss
+    # that nobody sees is the worst possible failure for a formatting service.
+    #
+    # The ceiling below is deliberately far above any real CV. It exists only to
+    # fail loudly rather than hand the API something it cannot process:
+    #   - claude-haiku-4-5 has a 200k-token context (~800k characters)
+    #   - claude_max_tokens is 64,000 output tokens, and the JSON is roughly the
+    #     size of the input text, so ~200k characters of CV is the practical
+    #     ceiling before the JSON itself would be cut off mid-structure
+    # A real CV is 3,000-30,000 characters. Ten pages is about 30,000.
+    max_input_chars = 1_000_000
     if len(raw_text) > max_input_chars:
-        logger.warning(f"CV text truncated from {len(raw_text)} to {max_input_chars} chars before parsing")
-        raw_text = raw_text[:max_input_chars]
+        raise ValueError(
+            f"CV text is {len(raw_text):,} characters, above the {max_input_chars:,} "
+            f"limit. Nothing has been truncated — this document needs splitting or "
+            f"checking, as it is far larger than any normal CV."
+        )
+    if len(raw_text) > 200_000:
+        logger.warning(
+            f"CV text is {len(raw_text):,} chars — above the ~200k practical ceiling "
+            f"for a complete JSON response. Parsing anyway; watch for a JSON error."
+        )
 
     last_error = None
 

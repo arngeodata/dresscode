@@ -262,3 +262,93 @@ def get_organisation_by_email_username(username: str) -> Organisation | None:
         return None
 
     return Organisation(**result.data[0])
+
+
+# ── Reseller profiles ────────────────────────────────────────────────────────
+# An account like Ally sends every CV from one domain (@ally.com) but each CV
+# belongs to a different end client and must come back in that client's style.
+# The FROM domain still authenticates; the TO address selects the style.
+
+
+def get_profile_by_inbox(org_id: str, inbox_local: str):
+    """
+    Find the style profile for a TO address, scoped to the authenticated org.
+
+    Matched on the WHOLE local part ('ally-allenyork'), never by splitting on a
+    separator. Exact matching means a new profile can never shadow an existing
+    org's address, and there is no separator convention to get wrong.
+
+    Returns a dict, or None if this org has no profile for that address.
+    """
+    if not org_id or not inbox_local:
+        return None
+
+    supabase = get_supabase()
+
+    # limit(1), never maybe_single(): PostgREST answers maybe_single() with a
+    # 406 on zero rows and supabase-py raises on it. That is what turned every
+    # email from an unknown domain into a 500 during the 24 Aug outage.
+    result = (
+        supabase.table("org_profiles")
+        .select("*")
+        .eq("org_id", org_id)
+        .eq("inbox_local", inbox_local.lower().strip())
+        .eq("active", True)
+        .limit(1)
+        .execute()
+    )
+
+    return result.data[0] if result.data else None
+
+
+def org_has_profiles(org_id: str) -> bool:
+    """
+    Does this account use per-client profiles at all?
+
+    Decides what an unrecognised address means. For an account with no profiles
+    (every customer before Ally) the TO address carries no style information, so
+    anything addressed to them is simply their one house style — unchanged
+    behaviour. For an account WITH profiles, an address we cannot match is a
+    typo, and guessing a style would put one client's CV on another client's
+    letterhead. Those must fail loudly instead.
+    """
+    if not org_id:
+        return False
+
+    supabase = get_supabase()
+    result = (
+        supabase.table("org_profiles")
+        .select("id")
+        .eq("org_id", org_id)
+        .eq("active", True)
+        .limit(1)
+        .execute()
+    )
+
+    return bool(result.data)
+
+
+def increment_profile_cv_count(profile_id: str) -> None:
+    """
+    Bump a profile's own counter. The billing cap stays on the organisation —
+    this exists so a reseller can rebill their clients from real numbers.
+    Best-effort: a counter that fails to increment must never lose a CV.
+    """
+    if not profile_id:
+        return
+
+    supabase = get_supabase()
+    try:
+        current = (
+            supabase.table("org_profiles")
+            .select("cv_count")
+            .eq("id", profile_id)
+            .limit(1)
+            .execute()
+        )
+        if not current.data:
+            return
+        n = (current.data[0].get("cv_count") or 0) + 1
+        supabase.table("org_profiles").update({"cv_count": n}).eq("id", profile_id).execute()
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Could not increment profile counter {profile_id}: {e}")

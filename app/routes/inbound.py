@@ -15,10 +15,13 @@ from app.config import get_settings
 from app.services.limits import (
     get_organisation_by_domain,
     get_organisation_by_email_username,
+    get_profile_by_inbox,
+    org_has_profiles,
     check_limits,
     LimitStatus,
 )
 from app.services.emailer import (
+    send_plain_email,
     send_not_authorised_email,
     send_no_attachment_email,
     send_limit_warning_email,
@@ -64,6 +67,10 @@ async def handle_inbound(request: Request):
     is_trial = recipient_local == settings.trial_username.lower()
 
     # ── 1. Resolve the organisation ────────────────────────────────────────────
+    # profile stays None for every account that does not resell. Initialised
+    # here so the trial branch and the job insert can both see it.
+    profile = None
+
     if is_trial:
         # Trial mode: public lead magnet — skip FROM-domain auth, use the 'trial' org.
         org = get_organisation_by_email_username(settings.trial_username)
@@ -88,6 +95,41 @@ async def handle_inbound(request: Request):
             logger.warning(f"No active organisation found for sender domain: {sender_domain}")
             # Don't send an email back — could be spam/probing
             return {"status": "ignored", "reason": "unknown_sender_domain"}
+
+        # ── 2. Which house style? ─────────────────────────────────────────────
+        # The FROM domain said WHO. The TO address says WHICH STYLE, but only
+        # for accounts that resell to their own clients (Ally). Accounts with no
+        # profiles skip all of this and behave exactly as they always have.
+        #
+        # DO NOT DELETE THIS BLOCK. Without it every reseller job is queued with
+        # profile_id null, the worker falls back to the account's own slug,
+        # finds no builder there and drops through to the generic formatter —
+        # which puts the candidate's phone number and email address in front of
+        # the end client. That is exactly what happened on 28 Sep 2026 when this
+        # block was lost while editing the limits section below.
+        profile = get_profile_by_inbox(org.id, recipient_local)
+
+        if profile:
+            logger.info(
+                f"Profile matched for {recipient_local}@ → "
+                f"'{profile.get('name')}' (slug {profile.get('slug')})"
+            )
+        elif org_has_profiles(org.id) and recipient_local != (org.email_username or "").lower():
+            # This account DOES use per-client styles and we cannot match the
+            # address. Never guess: falling through would put one client's CV on
+            # another client's letterhead, or drop it into the generic layout
+            # with no error — the silent failure that caused the 2 Sep incident.
+            logger.warning(
+                f"{org.name} uses per-client profiles but '{recipient_local}' matches none — rejecting"
+            )
+            send_plain_email(
+                sender_email,
+                "We could not match that address to a client",
+                f"Hi,\n\nWe could not match {recipient_local}@ to one of your clients, "
+                f"so that CV has not been formatted.\n\nCheck the address and send it "
+                f"again, or reply to this email and we'll sort it out.\n\nDresscode\n",
+            )
+            return {"status": "rejected", "reason": "unknown_profile"}
 
     # ── 3. Check for a valid CV attachment ────────────────────────────────────
     attachment = payload.first_cv_attachment()
@@ -172,6 +214,9 @@ async def handle_inbound(request: Request):
             "reply_to_address": recipient,
             "reply_subject": payload.Subject,
             "reply_message_id": payload.original_message_id(),
+            # Which house style the worker must build with. Null for everyone
+            # except reseller accounts.
+            "profile_id": profile["id"] if profile else None,
         }).execute()
     except Exception as e:
         logger.error(f"Failed to queue job: {e}")

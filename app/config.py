@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # e.g. https://billing.stripe.com/p/login/xxxxxxxx). Do NOT use a Payment Link (that starts a
     # NEW subscription and double-bills existing customers). Overridable via env BILLING_URL.
     billing_url: str = "https://billing.stripe.com/p/login/8x23cvaMAfse9ox5o3afS00"
+    booking_url: str = "https://cal.com/cvdresscode/30min"  # offered in limit warning / limit reached emails
     digest_to_email: str = "george@hyperion-partners.co.uk"  # daily trial-lead digest recipient
     digest_hour_utc: int = 7  # hour (UTC) to send the daily trial-lead digest (~7-8am UK)
 

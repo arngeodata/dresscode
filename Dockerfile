@@ -16,9 +16,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-# ── OCR fallback for scanned/image-only PDFs ─────────────────────────────────
-# tesseract-ocr = OCR engine; poppler-utils = pdf2image's pdftoppm rasteriser.
-# Only used when a PDF has no text layer (scanned/photographed CVs).
+# ── PDF text extraction + OCR fallback ───────────────────────────────────────
+# poppler-utils is REQUIRED ON THE MAIN PATH, not just for OCR. It provides:
+#   pdftotext — extractor.py's first-choice PDF reader, run with -layout so a
+#               CV that sets its Education or Skills block out in columns keeps
+#               its rows intact. Without it we fall back to pdfplumber, and
+#               without that to pdfminer, which flattens columns into separate
+#               lists and mis-pairs dates with qualifications.
+#   pdftoppm  — pdf2image's rasteriser, used only by the OCR fallback.
+# tesseract-ocr is the OCR engine, used only when a PDF has no text layer.
+# DO NOT drop poppler-utils if OCR is ever turned off.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     poppler-utils \

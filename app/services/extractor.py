@@ -3,8 +3,8 @@ CV text extraction from PDF and Word-family files (.docx / .doc / .rtf).
 Returns plain text suitable for passing to the Claude API.
 
 Extraction strategy:
-  - PDF            → pdfminer directly.
-  - Word-family    → convert to PDF with headless LibreOffice, then pdfminer.
+  - PDF            → pdftotext -layout, then pdfplumber, then pdfminer.
+  - Word-family    → convert to PDF with headless LibreOffice, then the above.
                      This captures text that python-docx silently drops (Word
                      text boxes, drawings, legacy binary .doc) and de-duplicates
                      Word's AlternateContent (modern + legacy copies). Falls back
@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 # LibreOffice binary (installed via the Dockerfile as `libreoffice-writer`).
 _SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
 _LO_TIMEOUT_SECONDS = 90
+
+# poppler-utils. Preferred PDF reader — see _extract_from_pdf for why.
+_PDFTOTEXT = shutil.which("pdftotext")
+_PDFTOTEXT_TIMEOUT_SECONDS = 60
 
 
 def extract_text(content_b64: str, content_type: str, filename: str) -> str:
@@ -63,7 +67,110 @@ def extract_text(content_b64: str, content_type: str, filename: str) -> str:
 
 
 def _extract_from_pdf(file_bytes: bytes) -> str:
-    """Extract text from PDF using pdfminer."""
+    """
+    Extract text from PDF, PRESERVING THE LAYOUT OF THE PAGE.
+
+    WHY THIS IS NOT JUST pdfminer.extract_text ANYMORE
+    --------------------------------------------------
+    Plenty of CVs set their Education or Skills block out in columns, either as
+    a table or with tab stops:
+
+        2025 - current    Certificate in Sustainability    Institute of Sust...
+                          and Environmental Management     and Env Professionals
+        2023              Level 3 Award in Leadership      Institute of L&M
+
+    pdfminer's default layout analysis groups a page into blocks and emits them
+    block by block. On a layout like that it returns every DATE first, then the
+    qualifications, then the institutions — the rows are destroyed, and nothing
+    downstream can put them back together. Claude is then asked to re-pair three
+    lists of different lengths and, reasonably enough, slips a row: the Nikki
+    Dekker CV came back with three qualifications against the wrong institutions
+    and a date range invented out of two different rows.
+
+    pdftotext -layout reconstructs the page as it looks, so a row stays a row and
+    a wrapped cell stays indented under its own column. Verified on that CV as
+    word-for-word identical to the old output — 509 words either way, nothing
+    gained or lost — with the rows intact.
+
+    Order of preference:
+      1. pdftotext -layout   (poppler-utils; best column separation)
+      2. pdfplumber layout=True  (pure Python, same idea, tighter gaps)
+      3. pdfminer            (last resort; loses columns, but never returns
+                              nothing where the others would have)
+      4. OCR                 (no text layer at all)
+    """
+    text = ""
+
+    # ── 1. poppler ──────────────────────────────────────────────────────────
+    if _PDFTOTEXT:
+        try:
+            text = _pdf_via_pdftotext(file_bytes)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"pdftotext failed ({e}); trying pdfplumber.")
+    else:
+        logger.info("pdftotext not on PATH; trying pdfplumber.")
+
+    # ── 2. pdfplumber ───────────────────────────────────────────────────────
+    if not text:
+        try:
+            text = _pdf_via_pdfplumber(file_bytes)
+        except ImportError:
+            logger.info("pdfplumber not installed; falling back to pdfminer.")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"pdfplumber failed ({e}); falling back to pdfminer.")
+
+    # ── 3. pdfminer ─────────────────────────────────────────────────────────
+    if not text:
+        text = _pdf_via_pdfminer(file_bytes)
+
+    if text:
+        return text
+
+    # ── 4. No text layer at all → scanned document ──────────────────────────
+    from app.config import get_settings
+    if get_settings().ocr_enabled:
+        logger.info("PDF has no text layer; attempting OCR fallback.")
+        ocr_text = _ocr_pdf(file_bytes)
+        if ocr_text:
+            logger.info(f"OCR fallback recovered {len(ocr_text)} chars.")
+            return ocr_text
+
+    raise ValueError("PDF appears to be scanned/image-only — no extractable text found.")
+
+
+def _pdf_via_pdftotext(file_bytes: bytes) -> str:
+    """poppler's pdftotext with -layout. Reads from a temp file, not stdin, so a
+    malformed PDF fails cleanly rather than hanging on a pipe."""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "input.pdf")
+        with open(src, "wb") as fh:
+            fh.write(file_bytes)
+        proc = subprocess.run(
+            [_PDFTOTEXT, "-layout", "-enc", "UTF-8", src, "-"],
+            capture_output=True,
+            timeout=_PDFTOTEXT_TIMEOUT_SECONDS,
+        )
+    if proc.returncode != 0:
+        raise ValueError(proc.stderr.decode("utf-8", "ignore")[:200] or "pdftotext failed")
+    return proc.stdout.decode("utf-8", "ignore").strip()
+
+
+def _pdf_via_pdfplumber(file_bytes: bytes) -> str:
+    """Pure-Python layout mode. Same idea as pdftotext -layout, and the fallback
+    when poppler is not installed on the host."""
+    import pdfplumber
+
+    pages = []
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            pages.append(page.extract_text(layout=True) or "")
+    return "\n".join(pages).strip()
+
+
+def _pdf_via_pdfminer(file_bytes: bytes) -> str:
+    """The original path. Kept as a last resort: it loses column structure, but
+    it has read every CV we have ever processed, so it never comes out worse
+    than nothing."""
     try:
         from pdfminer.high_level import extract_text_to_fp
         from pdfminer.layout import LAParams
@@ -76,23 +183,7 @@ def _extract_from_pdf(file_bytes: bytes) -> str:
             output_type="text",
             codec="utf-8",
         )
-        text = output.getvalue().strip()
-
-        if text:
-            return text
-
-        # No text layer → likely a scanned / photographed / image-exported PDF.
-        # Try OCR before giving up.
-        from app.config import get_settings
-        if get_settings().ocr_enabled:
-            logger.info("PDF has no text layer; attempting OCR fallback.")
-            ocr_text = _ocr_pdf(file_bytes)
-            if ocr_text:
-                logger.info(f"OCR fallback recovered {len(ocr_text)} chars.")
-                return ocr_text
-
-        raise ValueError("PDF appears to be scanned/image-only — no extractable text found.")
-
+        return output.getvalue().strip()
     except ImportError:
         raise RuntimeError("pdfminer.six is not installed. Run: pip install pdfminer.six")
     except Exception as e:

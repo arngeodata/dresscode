@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class LimitStatus(Enum):
     OK = "ok"                       # Comfortably within the included allowance
     APPROACHING_CAP = "approaching" # 90%+ of allowance used — process + notify
-    OVER_CAP = "over_cap"           # Allowance used up — process, bill overage per CV
+    AT_CAP = "at_cap"               # Allowance used up — REJECT. No overage exists.
     EXPIRED = "expired"             # Pilot/trial window has closed — REJECT, do not process
 
 
@@ -31,19 +31,21 @@ class LimitCheck:
 
 def check_limits(org: Organisation) -> LimitCheck:
     """
-    Classify where an organisation sits against its included CV allowance.
+    Classify where an organisation sits against its monthly CV allowance.
 
-    NOTE: Pricing model is "flat fee + overage" (see session-log.md). We no
-    longer HARD-STOP at the cap — every CV is processed and usage above the cap
-    is billed per-CV via Stripe metering (see billing.py + increment_cv_count).
-    This function now only decides what *message* to surface, not whether to
-    proceed.
+    PRICING MODEL: A FIXED NUMBER OF CVs FOR A FIXED MONTHLY FEE.
+    There is no overage and no pay-as-you-go. A plan buys exactly its allowance,
+    so the allowance is a HARD STOP: at the cap, the CV is refused and the
+    account is told, rather than processed and billed for silently.
 
-    To reintroduce a hard stop (e.g. to bound overage on small Starter
-    accounts), add a new status here and have the caller reject on it.
+    This replaced a "flat fee + overage" model in which the cap was only a
+    message and every CV went through. That model let Ally take 29 CVs on a
+    25-CV pilot without anything stopping them — and because a pilot has no
+    Stripe customer, the "overage" metered to nothing at all.
 
-    The one exception is EXPIRED: a pilot account past its trial_ends_at is
-    rejected outright by the caller. That is the only hard stop in the system.
+    Two statuses now reject, and the caller must honour both:
+      EXPIRED  — pilot window closed
+      AT_CAP   — monthly allowance used up
     """
     # Pilot/trial window closed — the one status the caller must reject on.
     # Checked before the allowance because an expired account has no allowance
@@ -66,18 +68,18 @@ def check_limits(org: Organisation) -> LimitCheck:
             # A malformed date is our bug, not the sender's — never block a CV on it.
             logger.error("Unparseable trial_ends_at for %s: %r (%s)", org.name, org.trial_ends_at, e)
 
-    # No cap set → treat as within allowance (usage is still metered downstream).
+    # No cap set → unlimited. Used for internal and bespoke accounts.
     if org.cv_limit is None:
         return LimitCheck(status=LimitStatus.OK, org=org)
 
-    # Allowance used up — overage territory (still processed).
+    # Allowance used up — REJECT.
     if org.cv_count >= org.cv_limit:
         return LimitCheck(
-            status=LimitStatus.OVER_CAP,
+            status=LimitStatus.AT_CAP,
             org=org,
             message=(
-                f"{org.name} over included allowance "
-                f"({org.cv_count}/{org.cv_limit}) — billing overage per CV"
+                f"{org.name} at allowance "
+                f"({org.cv_count}/{org.cv_limit}) — rejecting"
             ),
         )
 
@@ -92,30 +94,23 @@ def check_limits(org: Organisation) -> LimitCheck:
     return LimitCheck(status=LimitStatus.OK, org=org)
 
 
-# Per-CV overage rates above the included allowance (GBP). Keep in sync with Stripe.
-OVERAGE_RATES = {"starter": 2.50, "growth": 1.50, "studio": 0.50}
-
-
 def build_usage_note(tier: str, count: int, cv_limit: int | None) -> str:
     """
     One-line usage summary for the returned-CV email.
 
-    Within allowance:  "This is CV 47/50 included in your package this month."
-    Over allowance:     "This is CV 52 — 2 over your 50 included this month,
-                         billed at £2.50 each (pay-as-you-go)."
+        "This is CV 47 of 50 included in your plan this month."
+
+    There is no over-allowance wording any more: a plan is a fixed number of
+    CVs for a fixed fee, so a CV beyond the allowance is never delivered and
+    this note is never built for one.
     """
     if cv_limit is None:
         return f"This is CV {count} this month."
-
-    if count <= cv_limit:
-        return f"This is CV {count}/{cv_limit} included in your package this month."
-
-    over = count - cv_limit
-    rate = OVERAGE_RATES.get((tier or "").lower())
-    rate_txt = f", billed at £{rate:.2f} each (pay-as-you-go)" if rate else ""
-    return (
-        f"This is CV {count} — {over} over your {cv_limit} included this month{rate_txt}."
-    )
+    remaining = cv_limit - count
+    note = f"This is CV {count} of {cv_limit} included in your plan this month."
+    if 0 <= remaining <= 5:
+        note += f" {remaining} left." if remaining else " That is your last one this month."
+    return note
 
 
 def days_left_in_trial(trial_ends_at: str | None) -> int | None:

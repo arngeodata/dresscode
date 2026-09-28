@@ -169,7 +169,11 @@ def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
 
 def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_limit: int) -> bool:
     """
-    Send a 90% usage warning to the consultant.
+    90% usage warning, to the consultant who sent the CV, copied to George.
+
+    George is copied deliberately. Ally's consultant was warned at 23 of 25 and
+    George never saw it, so the first he knew of the account running out was
+    the client telling him. A warning is a sales trigger, not just a courtesy.
 
     Everything is inside the try, deliberately. This used to build body_text
     first, so a missing setting raised OUTSIDE the handler, propagated up
@@ -180,23 +184,30 @@ def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_lim
     try:
         settings = get_settings()
         remaining = cv_limit - cv_count
-        # getattr, not settings.billing_url: if the setting is absent the line
-        # is simply omitted rather than killing the request.
-        billing = getattr(settings, "billing_url", None)
-        upgrade = f"To avoid interruption, upgrade your plan here: {billing}\n\n" if billing else ""
+        # getattr, not settings.x: if a setting is absent the line is simply
+        # omitted rather than killing the request.
+        booking = getattr(settings, "booking_url", None)
+        support = getattr(settings, "dresscode_support_email", None)
 
         body_text = (
             f"Hi {org_name},\n\n"
-            f"You've used {cv_count} of your {cv_limit} monthly CVs - "
+            f"You've used {cv_count} of your {cv_limit} CVs this month - "
             f"just {remaining} remaining.\n\n"
-            f"{upgrade}"
-            "- Dresscode"
+            "Once the allowance is used, CVs sent to Dresscode are not processed "
+            "until the plan resets or you move up a plan.\n\n"
+            "Need more this month? Just reply to this email"
+            + (f", or book a time here: {booking}" if booking else "")
+            + ".\n\n"
+            "George\n"
+            + (f"{support}\n" if support else "")
         )
 
         client = _postmark_client()
         client.emails.send(
             From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
+            Cc=support or None,
+            ReplyTo=support or None,
             Subject=f"You're nearly at your CV limit this month — {remaining} remaining",
             TextBody=body_text,
         )
@@ -207,23 +218,37 @@ def send_limit_warning_email(to_email: str, org_name: str, cv_count: int, cv_lim
 
 
 def send_limit_reached_email(to_email: str, org_name: str, cv_limit: int) -> bool:
-    """Send a hard-block notification when the monthly limit is hit."""
-    settings = get_settings()
+    """
+    The allowance is used up and this CV was NOT processed. Sent to the
+    consultant who tried, copied to George.
 
-    body_text = (
-        f"Hi {org_name},\n\n"
-        f"You've reached your {cv_limit} CV limit for this month. "
-        f"CVs sent to Dresscode will not be processed until your limit resets or you upgrade.\n\n"
-        f"Upgrade your plan here — takes 60 seconds: {settings.billing_url}\n\n"
-        "— Dresscode"
-    )
-
+    Wrapped end to end for the same reason as the warning above: a notification
+    must never be able to take down the webhook.
+    """
     try:
+        settings = get_settings()
+        booking = getattr(settings, "booking_url", None)
+        support = getattr(settings, "dresscode_support_email", None)
+
+        body_text = (
+            f"Hi {org_name},\n\n"
+            f"That CV has not been formatted - you've used all {cv_limit} CVs "
+            f"included in your plan this month.\n\n"
+            "Send it again once your plan resets and it will go through as normal.\n\n"
+            "Need more this month? Just reply to this email"
+            + (f", or book a time here: {booking}" if booking else "")
+            + " and I'll sort it out.\n\n"
+            "George\n"
+            + (f"{support}\n" if support else "")
+        )
+
         client = _postmark_client()
         client.emails.send(
             From=f"Dresscode <{settings.dresscode_from_email}>",
             To=to_email,
-            Subject="You've reached your monthly CV limit",
+            Cc=support or None,
+            ReplyTo=support or None,
+            Subject=f"CV not formatted — you've used all {cv_limit} CVs this month",
             TextBody=body_text,
         )
         return True

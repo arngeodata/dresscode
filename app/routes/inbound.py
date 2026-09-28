@@ -15,8 +15,6 @@ from app.config import get_settings
 from app.services.limits import (
     get_organisation_by_domain,
     get_organisation_by_email_username,
-    get_profile_by_inbox,
-    org_has_profiles,
     check_limits,
     LimitStatus,
 )
@@ -24,8 +22,8 @@ from app.services.emailer import (
     send_not_authorised_email,
     send_no_attachment_email,
     send_limit_warning_email,
+    send_limit_reached_email,
     send_trial_expired_email,
-    send_plain_email,
 )
 from app.services.trial_leads import record_trial_lead, extract_phone
 
@@ -66,7 +64,6 @@ async def handle_inbound(request: Request):
     is_trial = recipient_local == settings.trial_username.lower()
 
     # ── 1. Resolve the organisation ────────────────────────────────────────────
-    profile = None
     if is_trial:
         # Trial mode: public lead magnet — skip FROM-domain auth, use the 'trial' org.
         org = get_organisation_by_email_username(settings.trial_username)
@@ -92,40 +89,6 @@ async def handle_inbound(request: Request):
             # Don't send an email back — could be spam/probing
             return {"status": "ignored", "reason": "unknown_sender_domain"}
 
-        # ── 2. Which house style? ─────────────────────────────────────────────
-        # The FROM domain said WHO. The TO address says WHICH STYLE, but only
-        # for accounts that resell to their own clients (Ally). Accounts with no
-        # profiles skip all of this and behave exactly as they always have.
-        profile = get_profile_by_inbox(org.id, recipient_local)
-
-        if profile:
-            logger.info(
-                f"{sender_email} → {org.name} / profile '{profile['name']}' "
-                f"({recipient_local} → slug {profile['slug']})"
-            )
-        elif org_has_profiles(org.id) and recipient_local != (org.email_username or "").lower():
-            # This account DOES use per-client styles and we cannot match the
-            # address. Never guess: falling through would put one client's CV on
-            # another client's letterhead, or drop it into the generic layout
-            # with no error — the silent failure that caused the 2 Sep incident.
-            logger.warning(
-                f"Unrecognised profile address '{recipient_local}' for {org.name} "
-                f"(from {sender_email}) — rejecting rather than guessing a style"
-            )
-            try:
-                send_plain_email(
-                    sender_email,
-                    "We could not match that address to a client",
-                    f"We received your CV addressed to {recipient}, but that address "
-                    f"is not set up against any of your clients.\n\n"
-                    f"Please check the spelling and resend. Nothing has been "
-                    f"processed, so no formatted CV is on its way.\n\n"
-                    f"If the client is new, let us know and we will set them up.",
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"Unknown-profile notice failed for {sender_email}: {e}")
-            return {"status": "rejected", "reason": "unknown_profile"}
-
     # ── 3. Check for a valid CV attachment ────────────────────────────────────
     attachment = payload.first_cv_attachment()
     if not attachment:
@@ -141,28 +104,35 @@ async def handle_inbound(request: Request):
         return {"status": "rejected", "reason": "attachment_too_large"}
 
     # ── 4. Check usage limits (customer orgs only — never for the public trial) ─
-    # Pricing model is "flat fee + overage" — we no longer reject at the cap.
-    # The sole rejection is an expired pilot account (LimitStatus.EXPIRED).
-    # Every CV is processed; usage above the included allowance is billed per-CV
-    # via Stripe metering (see limits.increment_cv_count / billing.report_cv_usage).
+    # Pricing is a FIXED NUMBER OF CVs FOR A FIXED MONTHLY FEE. There is no
+    # overage and no pay-as-you-go, so the allowance is a hard stop: at the cap
+    # the CV is refused and the account is told. Two statuses reject —
+    # EXPIRED (pilot window closed) and AT_CAP (allowance used up).
+    #
+    # This used to process every CV and "bill the overage", which on a pilot
+    # account billed nothing at all: Ally took 29 CVs against a 25 CV pilot and
+    # nothing stopped them.
     if not is_trial:
         limit_check = check_limits(org)
 
         if limit_check.status == LimitStatus.EXPIRED:
-            # Pilot window closed. The ONE case where a CV is not processed:
-            # reject before the file is stored or a job is queued.
+            # Pilot window closed. Reject before the file is stored or a job queued.
             logger.info(limit_check.message)
             send_trial_expired_email(sender_email, org.name, org.cv_count, org.cv_limit)
             return {"status": "rejected", "reason": "trial_expired"}
 
-        if limit_check.status == LimitStatus.OVER_CAP:
-            # Over the included allowance — process anyway, overage is metered/billed.
-            logger.info(
-                f"Overage for {org.name} ({org.cv_count}/{org.cv_limit}) — processing, billing per CV"
-            )
+        if limit_check.status == LimitStatus.AT_CAP:
+            # Allowance used up. Same treatment: refuse before storing anything.
+            logger.info(limit_check.message)
+            # Belt and braces — a notification must never take down the webhook.
+            try:
+                send_limit_reached_email(sender_email, org.name, org.cv_limit)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Limit-reached email failed for {org.name}: {e}")
+            return {"status": "rejected", "reason": "allowance_used"}
 
-        elif limit_check.status == LimitStatus.APPROACHING_CAP:
-            # Process the CV and warn that the included allowance is nearly used.
+        if limit_check.status == LimitStatus.APPROACHING_CAP:
+            # Process the CV and warn that the allowance is nearly used.
             logger.info(f"Approaching allowance for {org.name} ({org.cv_count}/{org.cv_limit})")
             # Belt and braces: the warning is a courtesy. If it fails for any
             # reason the CV must still go through. (It once raised on a missing
@@ -202,16 +172,10 @@ async def handle_inbound(request: Request):
             "reply_to_address": recipient,
             "reply_subject": payload.Subject,
             "reply_message_id": payload.original_message_id(),
-            # Which house style the worker should use. Null for every account
-            # that does not use per-client profiles.
-            "profile_id": profile["id"] if profile else None,
         }).execute()
     except Exception as e:
         logger.error(f"Failed to queue job: {e}")
         raise HTTPException(status_code=500, detail="Queue error")
 
-    logger.info(
-        f"Job {job_id} queued for org {org.name}"
-        f"{' / ' + profile['name'] if profile else ''} (sender: {sender_email})"
-    )
+    logger.info(f"Job {job_id} queued for org {org.name} (sender: {sender_email})")
     return {"status": "queued", "job_id": job_id}

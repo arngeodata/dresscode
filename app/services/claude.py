@@ -21,7 +21,10 @@ Rules:
 - If multiple phone numbers exist, use the first mobile number.
 - credentials: extract any post-nominal letters or professional designations that appear after the candidate's name (e.g. "FRICS", "MSc MRICS", "CFA", "PhD"). Do not include these in full_name. If none are present, use null.
 - Skills: preserve the original grouping exactly. If skills appear under category labels (e.g. "Property: x, y, z" or "Software: a, b, c"), keep each group as a single string including its label. If skills are already listed as individual items, keep them as individual items.
-- Education: ALWAYS capture both start_date and end_date whenever the entry shows a date range in any form (e.g. "2007 - 2010", "Sep 2018 – Jun 2021", "2018 to 2021", "2019-22") — put the earlier date in start_date and the later in end_date, using the same "Month YYYY" (or just-year) formatting the source uses. Only if the entry shows a single date (one graduation/award year) leave start_date null and put that value in end_date (and year). Put any additional information listed under an education entry — modules, achievements, grades detail, dissertation, activities — as separate strings in details. Leave details empty if none.
+- Education: ALWAYS capture both start_date and end_date whenever the entry shows a date range in any form (e.g. "2007 - 2010", "Sep 2018 – Jun 2021", "2018 to 2021", "2019-22") — put the earlier date in start_date and the later in end_date, using the same "Month YYYY" (or just-year) formatting the source uses. Only if the entry shows a single date (one graduation/award year) leave start_date null and put that value in end_date (and year).
+- Education dates, OPEN-ENDED ranges: if the range has no closing date because the study is still in progress — "2025 - current", "2023 – present", "2024 onwards", "Sept 2025 to date", "expected 2027" — put the opening date in start_date and the literal word "Present" in end_date. Do NOT look for a closing date anywhere else.
+- Education dates, NEVER BORROW: a date belongs to the entry it is printed on and to no other. If an entry has no end date of its own, leave end_date null (or "Present" per the rule above). Never take a date from the entry above or below to fill a gap, even when every other entry has two dates. Put any additional information listed under an education entry — modules, achievements, grades detail, dissertation, activities — as separate strings in details. Leave details empty if none.
+- Languages — PUT THEM IN ONE PLACE, THE PLACE THE CANDIDATE PUT THEM. The languages array is ONLY for a CV that gives languages their own dedicated section or heading. If the languages are listed inside the skills section instead (e.g. a skills list ending "Languages: French (B2), Spanish", or a "Skills & Interests" block that mentions them), leave them exactly where they are as part of skills and return an EMPTY languages array. Never return the same languages in both skills and languages.
 - Any section that is not summary/profile, experience/career history, education, skills, or languages goes into extra_sections. Capture the section title exactly as it appears, and each paragraph or bullet point as a separate item in the items array.
 
 Return this exact structure:
@@ -120,31 +123,11 @@ def parse_cv(raw_text: str) -> tuple[ParsedCV, int, int]:
     settings = get_settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    # NOTHING IS EVER TRUNCATED.
-    #
-    # This used to silently cut the text at 15,000 chars and log a warning, so a
-    # long CV came back missing its last roles and nobody was told. Content loss
-    # that nobody sees is the worst possible failure for a formatting service.
-    #
-    # The ceiling below is deliberately far above any real CV. It exists only to
-    # fail loudly rather than hand the API something it cannot process:
-    #   - claude-haiku-4-5 has a 200k-token context (~800k characters)
-    #   - claude_max_tokens is 64,000 output tokens, and the JSON is roughly the
-    #     size of the input text, so ~200k characters of CV is the practical
-    #     ceiling before the JSON itself would be cut off mid-structure
-    # A real CV is 3,000-30,000 characters. Ten pages is about 30,000.
-    max_input_chars = 1_000_000
+    # Guard against very long CVs that would exceed max output tokens
+    max_input_chars = 15_000
     if len(raw_text) > max_input_chars:
-        raise ValueError(
-            f"CV text is {len(raw_text):,} characters, above the {max_input_chars:,} "
-            f"limit. Nothing has been truncated — this document needs splitting or "
-            f"checking, as it is far larger than any normal CV."
-        )
-    if len(raw_text) > 200_000:
-        logger.warning(
-            f"CV text is {len(raw_text):,} chars — above the ~200k practical ceiling "
-            f"for a complete JSON response. Parsing anyway; watch for a JSON error."
-        )
+        logger.warning(f"CV text truncated from {len(raw_text)} to {max_input_chars} chars before parsing")
+        raw_text = raw_text[:max_input_chars]
 
     last_error = None
 

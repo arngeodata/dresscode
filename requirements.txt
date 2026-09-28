@@ -1,7 +1,10 @@
 fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
+uvicorn[standard]==0.34.0
+pydantic==2.11.9
 pydantic-settings==2.5.2
+
+# MCP server (mounted at /mcp inside the existing FastAPI app)
+mcp==1.29.1
 
 # Supabase
 supabase==2.9.1
@@ -10,7 +13,11 @@ supabase==2.9.1
 anthropic==0.36.2
 
 # CV text extraction
+# pdfplumber is pinned to 0.11.5 because that is the last release that requires
+# pdfminer.six==20231228 — the version pinned below. Bumping pdfplumber past
+# 0.11.5 drags pdfminer up with it.
 pdfminer.six==20231228
+pdfplumber==0.11.5
 python-docx==1.1.2
 
 # OCR fallback for scanned/image-only PDFs

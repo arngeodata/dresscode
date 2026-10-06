@@ -13,7 +13,7 @@ import logging
 import re
 from datetime import datetime, timezone, timedelta
 
-from app.database import get_supabase
+from app.database import get_supabase, db_retry
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -201,12 +201,16 @@ def send_daily_digest(window_hours: int = 24) -> bool:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
 
     try:
-        recent = (
-            supabase.table("trial_leads")
-            .select("name, email, domain, phone, sent_count, first_seen, last_seen")
-            .gte("last_seen", cutoff)
-            .order("last_seen", desc=True)
-            .execute()
+        # db_retry: the 5 Oct GOAWAY killed this digest outright.
+        recent = db_retry(
+            lambda: (
+                supabase.table("trial_leads")
+                .select("name, email, domain, phone, sent_count, first_seen, last_seen")
+                .gte("last_seen", cutoff)
+                .order("last_seen", desc=True)
+                .execute()
+            ),
+            label="send_daily_digest",
         )
         leads = recent.data or []
 

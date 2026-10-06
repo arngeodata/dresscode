@@ -81,14 +81,38 @@ class CandidateContact(BaseModel):
     linkedin: Optional[str] = None
 
 
+class ContentBlock(BaseModel):
+    """A sub-heading inside a role or section, with the items printed under it.
+
+    Some CVs group a role's bullets under sub-headings ("Strategic Leadership",
+    "Stakeholder Management", "Key Achievements"). Before this existed there was
+    nowhere to put them, so the parse either dropped them (Steve Cousins, 6 Oct
+    2026 — six sub-headings deleted) or promoted them to invented top-level
+    sections (Elanor Hodkin, same day — three fabricated sections).
+
+    This is ADDITIVE. The flat responsibilities/items lists stay fully populated
+    and unchanged, so every builder that does not know about blocks keeps
+    working exactly as before. Only builders that read blocks see the structure.
+    """
+    heading: Optional[str] = None   # None for items printed before the first sub-heading
+    items: list[str] = []
+
+    _coerce_items = field_validator("items", mode="before")(_none_to_list)
+
+
 class ExperienceEntry(BaseModel):
     title: Optional[str] = None
     company: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     responsibilities: list[str] = []
+    # Populated ONLY when the role's bullets are grouped under sub-headings.
+    # Empty is the normal case. responsibilities remains the complete flat list
+    # either way — never read one as a substitute for the other.
+    responsibility_blocks: list[ContentBlock] = []
 
     _coerce_responsibilities = field_validator("responsibilities", mode="before")(_none_to_list)
+    _coerce_blocks = field_validator("responsibility_blocks", mode="before")(_none_to_list)
 
 
 class EducationEntry(BaseModel):
@@ -103,8 +127,13 @@ class EducationEntry(BaseModel):
 class ExtraSection(BaseModel):
     title: str
     items: list[str] = []  # paragraphs and bullet points in order
+    # Same contract as ExperienceEntry.responsibility_blocks: populated only
+    # when this section's items are grouped under sub-headings, and items stays
+    # the complete flat list regardless.
+    blocks: list[ContentBlock] = []
 
     _coerce_items = field_validator("items", mode="before")(_none_to_list)
+    _coerce_blocks = field_validator("blocks", mode="before")(_none_to_list)
 
 
 class ParsedCV(BaseModel):

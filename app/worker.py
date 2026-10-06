@@ -80,6 +80,16 @@ async def run_daily_digest():
                 except Exception as e:
                     logger.error(f"Pilot digest error: {e}", exc_info=True)
 
+                # Retention on the parsed-CV debug log. Its own try/except for
+                # the same reason as the digests — one failure must not stop
+                # the others, and this one holds candidate personal data, so a
+                # silent failure to purge is worth a loud log line.
+                try:
+                    removed = get_supabase().rpc("purge_parsed_cv_log").execute()
+                    logger.info(f"Purged parsed CV log: {removed.data} rows older than 7 days.")
+                except Exception as e:
+                    logger.error(f"Parsed CV log purge failed: {e}", exc_info=True)
+
                 last_sent_date = now.date()
         except Exception as e:
             logger.error(f"Daily digest error: {e}", exc_info=True)
@@ -140,6 +150,23 @@ def _is_transient(exc: Exception) -> bool:
     return True   # default: give it another go
 
 
+def _is_missing_object(exc: Exception) -> bool:
+    """
+    True only when Supabase Storage says the object genuinely is not there.
+
+    Anything else — timeouts, 5xx, auth failures, connection resets — is an
+    UNKNOWN state and must not be read as "this account has no builder". See
+    the long comment at the builder fetch in process_next_job for why that
+    distinction is load-bearing.
+    """
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    if status in (400, 404):
+        return True
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(m in text for m in
+               ("not_found", "not found", "object not found", "no such key", "404"))
+
+
 async def _requeue_job(job_id: str, attempts: int, error_message: str) -> bool:
     """
     Put a job back in the queue with a backoff. Keeps the uploaded file.
@@ -178,6 +205,34 @@ async def _handle_error(job_id, sender_email, attempts, label, exc, permanent=Fa
             return
         message = f"{message} (gave up after {MAX_ATTEMPTS} attempts)"
     await _fail_job(job_id, sender_email, message)
+
+
+def _log_parsed_cv(job_id, org_id, profile_id, parsed_cv) -> None:
+    """
+    Write Claude's parsed JSON to parsed_cv_log. Best effort — never fails a job.
+
+    This is the only record of what the app UNDERSTOOD a CV to say. The builder
+    never sees the CV, only this JSON, so it is the line that separates a parse
+    fault from a builder fault. Without it, diagnosing a formatting complaint
+    means reverse-engineering a Word document and guessing (see Elanor Hodkin's
+    missing referees, 5 Oct 2026 — still unresolved for exactly this reason).
+
+    Wrapped in its own try/except on purpose: a debugging aid must never be the
+    thing that stops a customer's CV going out. If the insert fails we log it
+    and carry on.
+
+    Retention is 7 days, enforced by purge_parsed_cv_log() — the JSON holds the
+    candidate's name, email and phone. See migrations/10-parsed-cv-log.sql.
+    """
+    try:
+        get_supabase().table("parsed_cv_log").insert({
+            "job_id":      job_id,
+            "org_id":      org_id,
+            "profile_id":  profile_id,
+            "parsed_json": parsed_cv.model_dump(),
+        }).execute()
+    except Exception as e:
+        logger.warning(f"Could not store parsed CV JSON for job {job_id}: {e}")
 
 
 async def process_next_job():
@@ -325,6 +380,8 @@ async def process_next_job():
         await _handle_error(job_id, sender_email, attempts, "Claude parsing failed", e)
         return
 
+    _log_parsed_cv(job_id, org_id, profile_id, parsed_cv)
+
     # ── Fetch branded header image (if configured in style guide) ─────────────
     header_image_bytes = None
     hdr_cfg    = style_guide.get("header", {})
@@ -337,14 +394,55 @@ async def process_next_job():
         except Exception as e:
             logger.warning(f"Could not load header image {img_bucket}/{img_path}: {e}")
 
-    # ── Try Node.js builder; fall back to Python formatter ────────────────────
+    # ── Fetch the Node.js builder ─────────────────────────────────────────────
+    # READ THIS BEFORE SIMPLIFYING THE ERROR HANDLING.
+    #
+    # build_cv_docx is a GENERIC house style. It prints the candidate's phone
+    # number and email address unless the style guide suppresses them, and it
+    # knows nothing about an account's cover sheet, fonts or layout. It exists
+    # so a brand-new account still gets something usable during onboarding. It
+    # is NOT a safety net for a configured account.
+    #
+    # Until 5 Oct 2026 this block caught EVERY exception from the Storage
+    # download and dropped through to that formatter. One transient download
+    # failure on Thomas Brockwell's CV therefore sent Allen & York a generic
+    # document with the candidate's mobile number and personal email on the
+    # first line. The builder was in Storage the whole time and had been since
+    # 30 Sept — a single download simply failed.
+    #
+    # So: a MISSING builder is a legitimate fallback. A FAILED download is not.
+    # It routes to _handle_error, which retries with backoff and eventually
+    # fails the job loudly, instead of quietly shipping contact details.
     builder_js_bytes = None
     builder_path     = f"{org_slug}/cv_builder.js"
     try:
         builder_js_bytes = supabase.storage.from_("org-builders").download(builder_path)
         logger.info(f"Node.js builder found for org {org_name} ({org_slug})")
-    except Exception:
-        logger.info(f"No Node.js builder at org-builders/{builder_path} — using Python formatter")
+    except Exception as e:
+        if not _is_missing_object(e):
+            # Network blip, Storage outage, rate limit, auth. Unknown state —
+            # retry rather than degrade to the generic formatter.
+            await _handle_error(job_id, sender_email, attempts,
+                                "Builder download failed", e)
+            return
+        if profile_id:
+            # A reseller profile always names a slug that is supposed to have a
+            # builder. If it has genuinely gone, that is a misconfiguration,
+            # not an onboarding state. Never fall through for these accounts.
+            await _handle_error(
+                job_id, sender_email, attempts,
+                "Builder missing for configured profile",
+                RuntimeError(
+                    f"org-builders/{builder_path} not found, but this job names "
+                    f"profile {profile_id}. Refusing to fall back to the "
+                    f"generic formatter."
+                ),
+                permanent=True,
+            )
+            return
+        logger.info(
+            f"No Node.js builder at org-builders/{builder_path} — using Python formatter"
+        )
 
     try:
         if builder_js_bytes:

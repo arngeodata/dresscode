@@ -127,10 +127,30 @@ def parse_cv(raw_text: str) -> tuple[ParsedCV, int, int]:
     settings = get_settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    # Guard against very long CVs that would exceed max output tokens
-    max_input_chars = 15_000
+    # Guard against a runaway attachment, NOT against ordinary long CVs.
+    #
+    # This was 15,000 chars, set "to avoid exceeding max output tokens". That
+    # reasoning did not hold. claude_max_tokens is 64,000 and a CV produces
+    # roughly one output token per 4.4 chars of input, so the output cap is not
+    # reached until about 280,000 input chars. The old limit was ~19x tighter
+    # than its own stated purpose required, and it silently truncated real CVs:
+    # Steve Cousins (15,092 chars, 6 Oct 2026) lost one qualification outright
+    # and had another clipped mid-line, and the client was sent that CV with no
+    # warning to anyone. Do not lower this again without redoing that sum.
+    #
+    # 100,000 chars is ~6-7x the longest CV seen, yields ~23,000 output tokens
+    # (about a third of the cap), and still stops someone emailing a 400-page
+    # PDF by mistake.
+    max_input_chars = 100_000
     if len(raw_text) > max_input_chars:
-        logger.warning(f"CV text truncated from {len(raw_text)} to {max_input_chars} chars before parsing")
+        # ERROR, not warning. Truncation means the formatted CV we are about to
+        # send is incomplete. That must be loud enough to find in the logs
+        # without knowing to look for it.
+        logger.error(
+            f"CV TEXT TRUNCATED: {len(raw_text)} chars cut to {max_input_chars}. "
+            f"{len(raw_text) - max_input_chars} chars discarded. The formatted CV "
+            f"will be missing content from the end of the source document."
+        )
         raw_text = raw_text[:max_input_chars]
 
     last_error = None

@@ -8,7 +8,7 @@ import math
 from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass
-from app.database import get_supabase
+from app.database import get_supabase, db_retry
 from app.models import Organisation
 from app.services.billing import report_cv_usage
 
@@ -217,13 +217,18 @@ def get_organisation_by_domain(sender_domain: str) -> Organisation | None:
     # 406 when nothing matches, and supabase-py raises on it. Every email from
     # an unrecognised domain - spam, probes, Postmark's own webhook test - then
     # returned a 500 instead of being quietly ignored.
-    result = (
-        supabase.table("organisations")
-        .select("*")
-        .contains("allowed_domains", [sender_domain.lower().strip()])
-        .eq("active", True)
-        .limit(1)
-        .execute()
+    # db_retry: this runs inside the Postmark inbound webhook. A recycled
+    # Supabase connection used to 500 the whole webhook — see database.py.
+    result = db_retry(
+        lambda: (
+            supabase.table("organisations")
+            .select("*")
+            .contains("allowed_domains", [sender_domain.lower().strip()])
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        ),
+        label="get_organisation_by_domain",
     )
 
     if not result.data:
@@ -244,13 +249,16 @@ def get_organisation_by_email_username(username: str) -> Organisation | None:
     """
     supabase = get_supabase()
 
-    result = (
-        supabase.table("organisations")
-        .select("*")
-        .eq("email_username", username.lower().strip())
-        .eq("active", True)
-        .limit(1)
-        .execute()
+    result = db_retry(
+        lambda: (
+            supabase.table("organisations")
+            .select("*")
+            .eq("email_username", username.lower().strip())
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        ),
+        label="get_organisation_by_email_username",
     )
 
     if not result.data:
@@ -283,14 +291,20 @@ def get_profile_by_inbox(org_id: str, inbox_local: str):
     # limit(1), never maybe_single(): PostgREST answers maybe_single() with a
     # 406 on zero rows and supabase-py raises on it. That is what turned every
     # email from an unknown domain into a 500 during the 24 Aug outage.
-    result = (
-        supabase.table("org_profiles")
-        .select("*")
-        .eq("org_id", org_id)
-        .eq("inbox_local", inbox_local.lower().strip())
-        .eq("active", True)
-        .limit(1)
-        .execute()
+    # db_retry: also on the inbound webhook path. If this read fails the job is
+    # queued with profile_id null, the worker falls back to the account's own
+    # slug, and the client gets the generic formatter. Retry it.
+    result = db_retry(
+        lambda: (
+            supabase.table("org_profiles")
+            .select("*")
+            .eq("org_id", org_id)
+            .eq("inbox_local", inbox_local.lower().strip())
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        ),
+        label="get_profile_by_inbox",
     )
 
     return result.data[0] if result.data else None

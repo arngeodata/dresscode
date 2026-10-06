@@ -14,7 +14,7 @@ presentation.
 import logging
 from datetime import datetime, timezone
 
-from app.database import get_supabase
+from app.database import get_supabase, db_retry
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -145,11 +145,15 @@ def send_pilot_digest() -> bool:
     supabase = get_supabase()
 
     try:
-        result = (
-            supabase.table("pilot_dashboard")
-            .select("*")
-            .order("day_number", desc=True)
-            .execute()
+        # db_retry: same GOAWAY class of failure as the trial-lead digest.
+        result = db_retry(
+            lambda: (
+                supabase.table("pilot_dashboard")
+                .select("*")
+                .order("day_number", desc=True)
+                .execute()
+            ),
+            label="send_pilot_digest",
         )
         rows = result.data or []
 
